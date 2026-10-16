@@ -33,14 +33,17 @@ smootify-setup
 The command works outside the checkout: installer assets are retained in
 `/usr/local/lib/smootify/server` and the launcher in `/usr/local/sbin`.
 
-- Configured client names are listed when the menu opens.
+- **List clients** displays configured names and whether each profile is managed.
 - **Add client** creates a private profile and shows its QR.
 - **Revoke client** removes the selected managed client's access, after confirmation.
-- **Show client QR** re-displays an existing client's QR without changing its key.
-- **Uninstall (keep config)** removes the server and companion services while
-  preserving configuration, keys and profiles for a later reinstall.
-- **Uninstall and purge config** also deletes configuration and profiles after a
-  separate confirmation. The menu itself remains available to reinstall.
+- **Show client QR** lists managed clients with numbers: choose a number to display
+  that client's QR without changing its key. Choose **0** to cancel.
+- **Uninstall Smootify** has one confirmation and removes the server, companion
+  services, configuration, keys, profiles and installed management command.
+  Run the original checkout's setup script to install again.
+
+The menu offers installation when the server is absent and client management
+when it is installed.
 
 Adding or revoking users currently restarts the shared server and briefly
 interrupts all clients. Explicit configuration changes reset the previous systemd

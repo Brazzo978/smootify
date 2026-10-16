@@ -109,49 +109,89 @@ remove_client() {
     confirm "Revoke $name? This briefly restarts the server for all clients." || return 0
     backend revoke "$name"
 }
-show_client_qr() { installed || { error 'Install server first.'; return 1; }; prompt_name || return 1; backend export "$REPLY" --show-qr; }
+show_client_qr() {
+    installed || { error 'Install server first.'; return 1; }
+    local listing name state choice index=0 selected=''
+    local -a clients=()
+    listing=$(backend list) || return 1
+    printf 'Select a client to show its QR:\n'
+    while IFS=$'\t' read -r name state; do
+        [[ -n $name ]] || continue
+        # External users have no managed profile and cannot be exported.
+        [[ $state == managed ]] || continue
+        [[ $name =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { error 'Invalid client list.'; return 1; }
+        clients+=("$name")
+        index=$((index + 1))
+        printf '%s) %s\n' "$index" "$name"
+    done <<< "$listing"
+    ((${#clients[@]})) || { printf 'No managed client profiles are available.\n'; return 0; }
+    printf '0) Cancel\n'
+    read -r -p 'Client number: ' choice || return 0
+    [[ $choice != 0 ]] || return 0
+    index=0
+    for name in "${clients[@]}"; do
+        index=$((index + 1))
+        [[ $choice != "$index" ]] || selected=$name
+    done
+    [[ -n $selected ]] || { error 'Select a client number from the list.'; return 1; }
+    backend export "$selected" --show-qr
+}
 uninstall_server() {
-    local purge=$1 output unit
-    confirm 'Uninstall Smootify server and disconnect all clients?' || return 0
-    if [[ $purge == yes ]]; then confirm 'Permanently delete /etc/mqvpn configuration, keys and profiles?' || return 0; fi
+    local output unit
+    UNINSTALL_COMPLETED=no
+    confirm 'Uninstall Smootify, disconnect all clients and permanently delete configuration, keys and profiles?' || return 0
     [[ -f $UPSTREAM ]] || { error 'Pinned upstream installer unavailable.'; return 1; }
     for unit in mqvpn-management.service mqvpn-iperf.service; do
         if [[ -f /etc/systemd/system/$unit ]]; then
             systemctl disable --now "$unit" >/dev/null || { error "Could not stop $unit."; return 1; }
         fi
     done
-    if [[ $purge == yes ]]; then
-        if ! output=$(bash "$UPSTREAM" --purge 2>&1); then unset output; error 'Pinned purge failed; output withheld.'; return 1; fi
-    else
-        if ! output=$(bash "$UPSTREAM" --uninstall 2>&1); then unset output; error 'Pinned uninstall failed; output withheld.'; return 1; fi
-    fi
+    if ! output=$(bash "$UPSTREAM" --purge 2>&1); then unset output; error 'Pinned purge failed; output withheld.'; return 1; fi
     unset output
-    if [[ $purge == yes ]]; then rm -rf -- /var/lib/mqvpn-management || return 1; fi
+    rm -rf -- /var/lib/mqvpn-management || return 1
     rm -f /etc/systemd/system/mqvpn-management.service /etc/systemd/system/mqvpn-iperf.service /usr/local/libexec/mqvpn-management.py || return 1
     systemctl daemon-reload || return 1
-    printf 'Server removed. Reinstall using %s.\n' "$LAUNCHER"
-    [[ $purge == yes ]] || printf 'Configuration and profiles remain in /etc/mqvpn.\n'
+    rm -f -- "$LAUNCHER" /run/lock/mqvpn-provision.lock || return 1
+    rm -rf -- /usr/local/lib/smootify || return 1
+    UNINSTALL_COMPLETED=yes
+    printf 'Smootify removed, including configuration, client profiles and the management command.\n'
 }
 menu() {
-    local choice
+    local choice server_installed
     while :; do
         printf '\nSmootify VPS setup\n'
-        if installed; then list_clients || error 'Could not list clients.'; else printf 'Server is not installed.\n'; fi
-        printf '\n1) Install server / create first client\n2) Add client\n3) Revoke client\n4) Show client QR\n5) Uninstall (keep config)\n6) Uninstall and purge config\n0) Exit\n'
+        if installed; then
+            server_installed=yes
+            printf 'Server is installed.\n'
+            printf '\n1) List clients\n2) Add client\n3) Revoke client\n4) Show client QR\n5) Uninstall Smootify (remove everything)\n0) Exit\n'
+        else
+            server_installed=no
+            printf 'Server is not installed.\n'
+            printf '\n1) Install server / create first client\n0) Exit\n'
+        fi
         read -r -p 'Choose: ' choice || return 0
-        case "$choice" in
-            1) if installed; then add_client || error 'Client operation failed.'; else wizard || error 'Installation cancelled or failed.'; fi ;;
-            2) add_client || error 'Client operation failed.' ;;
-            3) remove_client || error 'Client operation failed.' ;;
-            4) show_client_qr || error 'QR export failed.' ;;
-            5) uninstall_server no || error 'Uninstall failed.' ;;
-            6) uninstall_server yes || error 'Purge failed.' ;;
-            0) return 0 ;;
-            *) error 'Unknown choice.' ;;
-        esac
+        if [[ $choice == 0 ]]; then return 0; fi
+        if [[ $server_installed == no ]]; then
+            case "$choice" in
+                1) wizard || error 'Installation cancelled or failed.' ;;
+                *) error 'Unknown choice.' ;;
+            esac
+        else
+            case "$choice" in
+                1) list_clients || error 'Could not list clients.' ;;
+                2) add_client || error 'Client operation failed.' ;;
+                3) remove_client || error 'Client operation failed.' ;;
+                4) show_client_qr || error 'QR export failed.' ;;
+                5) if uninstall_server; then
+                       [[ ${UNINSTALL_COMPLETED:-no} != yes ]] || return 0
+                   else error 'Uninstall failed.'; fi ;;
+                *) error 'Unknown choice.' ;;
+            esac
+        fi
         read -r -p 'Press Enter to return to menu... ' _ || return 0
     done
 }
+
 main() {
     if [[ ${1:-} == --help || ${1:-} == -h ]]; then
         printf 'Usage: bash setup.sh [--name NAME --server-address HOST (--tls-server-name HOST | --insecure) [--show-qr]]\nNo arguments: interactive Smootify VPS menu (root terminal).\n'
