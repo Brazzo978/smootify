@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.mqvpn.app.ui
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mqvpn.app.data.ConnectionProfile
+import com.mqvpn.app.data.ConnectionProfileParser
 import com.mqvpn.app.data.DemoSettings
 import com.mqvpn.app.data.SettingsRepository
 import com.mqvpn.app.data.SetupMode
@@ -11,6 +14,7 @@ import com.mqvpn.app.radio.RadioCoordinator
 import com.mqvpn.sdk.core.MqvpnManager
 import com.mqvpn.sdk.core.model.MqvpnState
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +36,7 @@ data class SetupDraft(
     val mobile: Boolean = true,
     val ethernet: Boolean = true,
     val excludeAndroidAuto: Boolean = true,
+    val importedProfile: ConnectionProfile? = null,
     val saving: Boolean = false,
     val error: String? = null,
     val finished: Boolean = false,
@@ -44,10 +49,40 @@ data class SetupDraft(
     val displayedStep: Int get() = if (usesVpn) step + 1 else when (step) { 0 -> 1; 3 -> 2; else -> 3 }
     fun nextStep(): Int = if (!usesVpn && step == 0) 3 else (step + 1).coerceAtMost(4)
     fun previousStep(): Int = if (!usesVpn && step == 3) 0 else (step - 1).coerceAtLeast(0)
+
+    fun withProfile(profile: ConnectionProfile): SetupDraft = copy(
+        serverAddress = profile.serverAddress,
+        serverPort = profile.serverPort.toString(),
+        authKey = profile.authKey,
+        tlsServerName = profile.tlsServerName,
+        insecure = profile.insecure,
+        importedProfile = profile,
+        error = null,
+    )
+
+    fun serverSettings(latest: DemoSettings): DemoSettings {
+        if (!usesVpn) return latest
+        return latest.copy(
+            serverAddress = serverAddress.trim(),
+            serverPort = serverPort.toInt(),
+            authKey = authKey.trim(),
+            tlsServerName = tlsServerName.trim(),
+            insecure = insecure,
+            wifiPathEnabled = wifi,
+            cellularPathEnabled = mobile,
+            ethernetPathEnabled = ethernet,
+            excludeAndroidAutoFromVpn = excludeAndroidAuto,
+            controlAddress = importedProfile?.controlAddress ?: latest.controlAddress,
+            controlPort = importedProfile?.controlPort ?: latest.controlPort,
+            serverMtu = importedProfile?.mtu ?: latest.serverMtu,
+            serverControlAllowed = importedProfile?.serverControlAllowed ?: latest.serverControlAllowed,
+        )
+    }
 }
 
 @HiltViewModel
 class SetupViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val repository: SettingsRepository,
     private val preferences: SetupPreferences,
     private val manager: MqvpnManager,
@@ -95,8 +130,31 @@ class SetupViewModel @Inject constructor(
     fun edit(change: (SetupDraft) -> SetupDraft) {
         _draft.update { current ->
             if (!current.loaded || current.saving || current.finished) current
-            else change(current).copy(error = null)
+            else {
+                val changed = change(current)
+                val credentialsChanged = changed.serverAddress != current.serverAddress ||
+                    changed.serverPort != current.serverPort || changed.authKey != current.authKey ||
+                    changed.tlsServerName != current.tlsServerName || changed.insecure != current.insecure
+                changed.copy(importedProfile = if (credentialsChanged) null else changed.importedProfile,
+                    error = null)
+            }
         }
+    }
+
+    fun importProfile(text: String) {
+        val current = _draft.value
+        if (!current.loaded || current.saving || current.finished) return
+        val profile = try {
+            ConnectionProfileParser.parse(text)
+        } catch (_: Exception) {
+            showProfileError("Invalid QR profile. Scan a valid server QR code or use advanced setup.")
+            return
+        }
+        _draft.update { if (!it.loaded || it.saving || it.finished) it else it.withProfile(profile) }
+    }
+
+    fun showProfileError(error: String) {
+        _draft.update { if (!it.loaded || it.saving || it.finished) it else it.copy(error = error) }
     }
 
     fun next() {
@@ -104,7 +162,7 @@ class SetupViewModel @Inject constructor(
         if (!current.loaded || current.saving) return
         val error = when {
             current.step == 1 && current.usesVpn && !current.validServer ->
-                "Enter a server address, port from 1 to 65535, and Auth Key."
+                "Scan your VPS profile QR code or enter server details in Advanced setup."
             current.step == 2 && current.usesVpn && !current.validTransport ->
                 "Select at least one VPN path."
             else -> null
@@ -122,7 +180,7 @@ class SetupViewModel @Inject constructor(
         if (!current.loaded || current.saving || current.finished) return
         if (current.step != 4) return
         if (current.usesVpn && !current.validServer) {
-            _draft.update { it.copy(step = 1, error = "Complete the server address, port, and key.") }
+            _draft.update { it.copy(step = 1, error = "Scan your VPS profile QR code or complete Advanced setup.") }
             return
         }
         if (current.usesVpn && !current.validTransport) {
@@ -139,17 +197,14 @@ class SetupViewModel @Inject constructor(
             try {
                 if (current.usesVpn) {
                     val latest: DemoSettings = repository.settings.first()
-                    repository.save(latest.copy(
-                        serverAddress = current.serverAddress.trim(),
-                        serverPort = current.serverPort.toInt(),
-                        authKey = current.authKey.trim(),
-                        tlsServerName = current.tlsServerName.trim(),
-                        insecure = current.insecure,
-                        wifiPathEnabled = current.wifi,
-                        cellularPathEnabled = current.mobile,
-                        ethernetPathEnabled = current.ethernet,
-                        excludeAndroidAutoFromVpn = current.excludeAndroidAuto,
-                    ))
+                    repository.save(current.serverSettings(latest))
+                    current.importedProfile?.let { profile ->
+                        check(context.getSharedPreferences("iperf-options", Context.MODE_PRIVATE)
+                            .edit().putString("host", profile.iperfHost)
+                            .putInt("port", profile.iperfPort).commit()) {
+                            "Could not save iperf endpoint."
+                        }
+                    }
                 }
                 preferences.markCompleted(current.mode)
                 _draft.update { it.copy(saving = false, finished = true) }

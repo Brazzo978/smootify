@@ -21,8 +21,8 @@ android {
         applicationId = "com.codmanu.smootify"
         minSdk = 26
         targetSdk = 36
-        versionCode = 49
-        versionName = "0.1.0"
+        versionCode = 51
+        versionName = "0.1.2"
         // arm64-v8a only: must match sdk-native's abiFilters. Adding ABIs here
         // without updating sdk-native produces APKs that crash with
         // UnsatisfiedLinkError on those ABIs (no .so packaged).

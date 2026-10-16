@@ -26,8 +26,8 @@ Android debug signing key. Release signing reads the `SMOOTIFY_KEYSTORE_PATH`,
 `SMOOTIFY_KEYSTORE_PASSWORD`, `SMOOTIFY_KEY_ALIAS` and `SMOOTIFY_KEY_PASSWORD` environment
 variables; without them the release APK remains unsigned. Never commit keys.
 
-The application ID is **`com.codmanu.smootify`**, version code 49, version
-`0.1.0`. This is a separate installed app from the original MQVPN PoC. Its
+The application ID is **`com.codmanu.smootify`**, version code 51, version
+`0.1.2`. This is a separate installed app from the original MQVPN PoC. Its
 permissions, VPN consent and Shizuku authorization must be granted for the new
 package; Android keeps the old app's private data separate. Android tunnel MTU
 remains fixed at **1280**.

@@ -26,6 +26,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -38,9 +39,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -67,6 +70,9 @@ fun SetupScreen(
     val phoneGranted = context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) ==
         PackageManager.PERMISSION_GRANTED
     var showAuth by remember { mutableStateOf(false) }
+    val scanProfile = rememberProfileQrScanner(vm::importProfile) { error ->
+        vm.showProfileError(error)
+    }
 
     LaunchedEffect(draft.finished) {
         if (draft.finished) onComplete()
@@ -102,7 +108,7 @@ fun SetupScreen(
             Text(
                 when (draft.step) {
                     0 -> "Choose what to set up. You can change these options later."
-                    1 -> "Enter your server details. The key stays hidden on screen."
+                    1 -> "Set up your VPS, then scan its QR code to fill the connection details."
                     2 -> "Choose which networks Smootify can use together when available."
                     3 -> if (draft.mode == SetupMode.SIM_ONLY) "Check SIM Switcher requirements." else "Check Android Auto and requirements for optional SIM switching."
                     else -> "Save the configuration. No connection or SIM change will start automatically."
@@ -115,7 +121,7 @@ fun SetupScreen(
             } else {
                 when (draft.step) {
                     0 -> ModeStep(draft, vm)
-                    1 -> ServerStep(draft, vm, showAuth) { showAuth = !showAuth }
+                    1 -> ServerStep(draft, vm, scanProfile, showAuth) { showAuth = !showAuth }
                     2 -> TransportStep(draft, vm)
                     3 -> CompatibilityStep(draft, vm, phoneGranted, shizuku, onOpenRadio)
                     4 -> ReviewStep(draft)
@@ -163,55 +169,100 @@ private fun ModeStep(draft: SetupDraft, vm: SetupViewModel) {
 }
 
 @Composable
-private fun ServerStep(draft: SetupDraft, vm: SetupViewModel, showAuth: Boolean, toggleAuth: () -> Unit) {
+private fun ServerStep(draft: SetupDraft, vm: SetupViewModel, scanProfile: () -> Unit, showAuth: Boolean, toggleAuth: () -> Unit) {
     if (!draft.usesVpn) {
         Card(Modifier.fillMaxWidth()) {
             Text("SIM-only mode: saved server details remain unchanged.", Modifier.padding(16.dp))
         }
         return
     }
-    OutlinedTextField(
-        value = draft.serverAddress,
-        onValueChange = { value -> vm.edit { it.copy(serverAddress = value) } },
-        label = { Text("Server IP address or name") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = draft.serverPort,
-        onValueChange = { value -> vm.edit { it.copy(serverPort = value) } },
-        label = { Text("UDP port") },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = draft.authKey,
-        onValueChange = { value -> vm.edit { it.copy(authKey = value) } },
-        label = { Text("Authentication key") },
-        singleLine = true,
-        visualTransformation = if (showAuth) VisualTransformation.None else PasswordVisualTransformation(),
-        trailingIcon = {
-            TextButton(onClick = toggleAuth) { Text(if (showAuth) "Hide" else "Show") }
-        },
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = draft.tlsServerName,
-        onValueChange = { value -> vm.edit { it.copy(tlsServerName = value) } },
-        label = { Text("TLS name (optional)") },
-        supportingText = { Text("If the certificate name differs from the server address.") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
+    val uriHandler = LocalUriHandler.current
+    var advanced by rememberSaveable { mutableStateOf(false) }
+    var guideError by remember { mutableStateOf<String?>(null) }
     Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = draft.insecure, onCheckedChange = { value -> vm.edit { it.copy(insecure = value) } })
-            Spacer(Modifier.width(12.dp))
-            Column {
-                Text("Accept unverified certificate", style = MaterialTheme.typography.titleSmall)
-                Text("Use only when needed for a trusted server: disables TLS verification.",
-                    style = MaterialTheme.typography.bodySmall)
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("1. Set up your VPS", style = MaterialTheme.typography.titleLarge)
+            Text("Follow the guide on your server. The setup script creates your client and shows a private QR code.")
+            OutlinedButton(onClick = {
+                try {
+                    uriHandler.openUri("https://github.com/Brazzo978/smootify/blob/main/server/provision/README.md")
+                    guideError = null
+                } catch (_: Exception) {
+                    guideError = "Could not open the guide. Visit github.com/Brazzo978/smootify on another device."
+                }
+            }, modifier = Modifier.fillMaxWidth()) { Text("Open VPS setup guide") }
+            guideError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("2. Scan your server QR", style = MaterialTheme.typography.titleLarge)
+            Text("Scan the QR displayed in your VPS terminal. It contains your personal access key, so keep it private.")
+            Button(onClick = scanProfile, modifier = Modifier.fillMaxWidth()) {
+                Text(if (draft.importedProfile != null) "Scan another QR" else "Scan server QR")
+            }
+        }
+    }
+    if (draft.validServer) {
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (draft.importedProfile != null) "Profile ready" else "Configured server", style = MaterialTheme.typography.titleLarge)
+                draft.importedProfile?.let { Text(it.name, style = MaterialTheme.typography.titleMedium) }
+                Text(draft.serverAddress.trim() + ":" + draft.serverPort)
+                Text("Authentication key: hidden")
+                if (draft.insecure) Text("TLS certificate verification disabled", color = MaterialTheme.colorScheme.error)
+                Text("Review the profile, then continue. Nothing is saved until you finish setup.", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+    TextButton(onClick = { advanced = !advanced }) {
+        Text(if (advanced) "Hide advanced setup" else "Advanced: enter details manually")
+    }
+    if (advanced) {
+        Text("Manual server configuration", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = draft.serverAddress,
+            onValueChange = { value -> vm.edit { it.copy(serverAddress = value) } },
+            label = { Text("Server IP address or name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = draft.serverPort,
+            onValueChange = { value -> vm.edit { it.copy(serverPort = value) } },
+            label = { Text("UDP port") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = draft.authKey,
+            onValueChange = { value -> vm.edit { it.copy(authKey = value) } },
+            label = { Text("Authentication key") },
+            singleLine = true,
+            visualTransformation = if (showAuth) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                TextButton(onClick = toggleAuth) { Text(if (showAuth) "Hide" else "Show") }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = draft.tlsServerName,
+            onValueChange = { value -> vm.edit { it.copy(tlsServerName = value) } },
+            label = { Text("TLS name (optional)") },
+            supportingText = { Text("If the certificate name differs from the server address.") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Card(Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = draft.insecure, onCheckedChange = { value -> vm.edit { it.copy(insecure = value) } })
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text("Accept unverified certificate", style = MaterialTheme.typography.titleSmall)
+                    Text("Use only when needed for a trusted server: disables TLS verification.",
+                        style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }
@@ -317,6 +368,3 @@ private fun ReviewStep(draft: SetupDraft) {
         }
     }
 }
-
-
-

@@ -58,6 +58,8 @@ firewall details, recovery and troubleshooting.
 
 The Android app is **Smootify**, package **`com.codmanu.smootify`**. It builds on
 the PoC8 tunnel/radio baseline with a simpler two-feature interface.
+Guided setup links to the VPS guide and scans the server QR before reviewing the
+connection. Manual server details are available under Advanced setup.
 The app and SDK sources live under [`upstream/android`](upstream/android).
 
 Follow the **[Android build guide](docs/ANDROID_BUILD.md)**. The repository includes

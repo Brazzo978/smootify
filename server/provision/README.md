@@ -20,7 +20,7 @@ The install wizard asks for a public IP or DNS name, the first client name and T
 mode. Missing distro packages can be installed after confirmation. Setup downloads
 the pinned upstream MQVPN **v0.17.0** release and verifies its SHA-256 manifest,
 configures forwarding/NAT, installs management and iperf, and creates a separate
-client key. Its QR imports into the Android PoC8 app, with **MTU 1280**.
+client key. Its QR imports into the Smootify Android app, with **MTU 1280**.
 
 ## The menu
 
