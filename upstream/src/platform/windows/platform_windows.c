@@ -1,0 +1,978 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 mp0rta and mqvpn contributors
+
+/*
+ * platform_windows.c — Windows platform layer for libmqvpn
+ *
+ * Bridges libmqvpn (sans-I/O) with Windows-specific I/O:
+ *   - libevent event loop driving tick()
+ *   - Wintun TUN device via reader thread + socketpair
+ *   - UDP path sockets, one slot each (the path slot mechanics below);
+ *     datagrams go through the bundled Winsock transport (mqvpn_bind_winsock)
+ *   - Ctrl+C handling via SetConsoleCtrlHandler
+ *
+ * Routing, killswitch, and DNS are in separate files.
+ */
+
+#ifdef _WIN32
+
+#  include "platform_internal_win.h"
+#  include "platform_windows.h"
+#  include "net_mon.h"
+#  include "cert_verify.h"
+#  include "log.h"
+#  include "mqvpn_internal.h" /* mqvpn_config_apply_hybrid (INI [Hybrid] bridge) */
+#  include "compat/socket_compat.h"
+
+#  include <inttypes.h>
+#  include <stdint.h>
+#  include <stdio.h>
+#  include <stdlib.h>
+#  include <string.h>
+
+/* UDP receive budget per readable event */
+#  define BULK_READ_COUNT 64
+
+/* ── Global for Ctrl+C handler (single-instance) ── */
+static platform_win_ctx_t *g_signal_ctx = NULL;
+
+/*
+ * Pin a UDP socket's egress to a specific NIC by FriendlyName.
+ *
+ * Windows lacks SO_BINDTODEVICE; the equivalent is IP_UNICAST_IF (v4) /
+ * IPV6_UNICAST_IF (v6), which forces outbound packets through a given
+ * interface index. The OS then auto-selects the source IP from that NIC,
+ * and reply packets to that source land back on this socket via the same
+ * NIC, giving QUIC a unique 4-tuple per path.
+ *
+ * Returns 0 on success, -1 on any failure (caller logs and falls back to
+ * default route-table behavior — same as pre-implementation behavior).
+ *
+ * Byte-order quirk (MSDN): IP_UNICAST_IF takes the index in NETWORK byte
+ * order; IPV6_UNICAST_IF takes it in HOST byte order. This is asymmetric
+ * by design, not a bug — be careful when refactoring.
+ *
+ * FriendlyName comes from argv; MSVC's CRT gives argv strings in the
+ * system ANSI code page (CP_ACP), not UTF-8. CP_ACP also equals CP_UTF8
+ * when "Use Unicode UTF-8 for worldwide language support" is enabled in
+ * Region settings, so this works in both default JP/CN/etc systems and
+ * UTF-8-enabled systems.
+ *
+ * Internal log level is WRN; the caller decides whether failure is fatal.
+ */
+int
+win_pin_socket_to_iface(SOCKET sock, const char *friendly_name, ADDRESS_FAMILY af)
+{
+    wchar_t wname[IF_MAX_STRING_SIZE + 1];
+    int wlen = MultiByteToWideChar(CP_ACP, 0, friendly_name, -1, wname,
+                                   (int)(sizeof(wname) / sizeof(wname[0])));
+    if (wlen <= 0) {
+        LOG_WRN("MultiByteToWideChar('%s') failed: %lu", friendly_name, GetLastError());
+        return -1;
+    }
+
+    NET_LUID luid;
+    DWORD err = ConvertInterfaceAliasToLuid(wname, &luid);
+    if (err != NO_ERROR) {
+        LOG_WRN("ConvertInterfaceAliasToLuid('%s') failed: %lu (check "
+                "FriendlyName via Get-NetAdapter)",
+                friendly_name, err);
+        return -1;
+    }
+
+    NET_IFINDEX ifindex;
+    err = ConvertInterfaceLuidToIndex(&luid, &ifindex);
+    if (err != NO_ERROR) {
+        LOG_WRN("ConvertInterfaceLuidToIndex('%s') failed: %lu", friendly_name, err);
+        return -1;
+    }
+
+    if (af == AF_INET) {
+        DWORD ifindex_n = htonl((u_long)ifindex);
+        if (setsockopt(sock, IPPROTO_IP, IP_UNICAST_IF, (const char *)&ifindex_n,
+                       sizeof(ifindex_n)) != 0) {
+            LOG_WRN("setsockopt(IP_UNICAST_IF, '%s'/%lu): %d", friendly_name,
+                    (unsigned long)ifindex, WSAGetLastError());
+            return -1;
+        }
+    } else if (af == AF_INET6) {
+        DWORD ifindex_h = (DWORD)ifindex;
+        if (setsockopt(sock, IPPROTO_IPV6, IPV6_UNICAST_IF, (const char *)&ifindex_h,
+                       sizeof(ifindex_h)) != 0) {
+            LOG_WRN("setsockopt(IPV6_UNICAST_IF, '%s'/%lu): %d", friendly_name,
+                    (unsigned long)ifindex, WSAGetLastError());
+            return -1;
+        }
+    } else {
+        LOG_WRN("win_pin_socket_to_iface: unsupported family %d", (int)af);
+        return -1;
+    }
+
+    LOG_INF("path: pinned fd=%" PRIuPTR " to iface '%s' (ifindex=%lu)", (uintptr_t)sock,
+            friendly_name, (unsigned long)ifindex);
+    return 0;
+}
+
+/* ================================================================
+ *  Path slot mechanics (the Windows sibling of the POSIX path_table.c)
+ * ================================================================ */
+
+/* The address a path socket binds to: the wildcard of the server's family,
+ * ephemeral port. Also what add_path is told as the path's local address. */
+static int
+wildcard_addr(ADDRESS_FAMILY af, struct sockaddr_storage *ss)
+{
+    memset(ss, 0, sizeof(*ss));
+    if (af == AF_INET6) {
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)ss;
+        sin6->sin6_family = AF_INET6;
+        sin6->sin6_addr = in6addr_any;
+        return (int)sizeof(struct sockaddr_in6);
+    }
+    struct sockaddr_in *sin = (struct sockaddr_in *)ss;
+    sin->sin_family = AF_INET;
+    sin->sin_addr.s_addr = htonl(INADDR_ANY);
+    return (int)sizeof(struct sockaddr_in);
+}
+
+platform_path_t *
+platform_path_append(platform_win_ctx_t *p, const char *iface)
+{
+    if (p->n_paths >= MQVPN_MAX_PATHS) return NULL;
+    platform_path_t *s = &p->paths[p->n_paths++];
+    memset(s, 0, sizeof(*s));
+    s->p = p;
+    s->sock = INVALID_SOCKET;
+    s->handle = -1;
+    if (iface && iface[0]) snprintf(s->iface, sizeof(s->iface), "%s", iface);
+    return s;
+}
+
+int
+platform_path_index(const platform_path_t *s)
+{
+    return (int)(s - s->p->paths);
+}
+
+SOCKET
+platform_path_socket_open(ADDRESS_FAMILY af, int *failed_step)
+{
+    SOCKET sock = socket(af, SOCK_DGRAM, 0);
+    if (sock == INVALID_SOCKET) {
+        *failed_step = PLATFORM_PATH_STEP_SOCKET;
+        return INVALID_SOCKET;
+    }
+    int step = 0;
+    u_long nb = 1;
+    if (ioctlsocket(sock, FIONBIO, &nb) != 0) {
+        step = PLATFORM_PATH_STEP_NONBLOCK;
+    } else {
+        struct sockaddr_storage ss;
+        int len = wildcard_addr(af, &ss);
+        if (bind(sock, (struct sockaddr *)&ss, len) != 0) step = PLATFORM_PATH_STEP_BIND;
+    }
+    if (step) {
+        int saved = WSAGetLastError(); /* callers log mqvpn_socket_strerror() */
+        closesocket(sock);
+        WSASetLastError(saved);
+        *failed_step = step;
+        return INVALID_SOCKET;
+    }
+    return sock;
+}
+
+void
+platform_path_fill_desc(const platform_win_ctx_t *p, const platform_path_t *s,
+                        mqvpn_path_desc_t *desc)
+{
+    memset(desc, 0, sizeof(*desc));
+    desc->struct_size = sizeof(*desc);
+    snprintf(desc->iface, sizeof(desc->iface), "%s", s->iface);
+    struct sockaddr_storage ss;
+    int len = wildcard_addr(p->server_addr.ss_family, &ss);
+    memcpy(desc->local_addr, &ss, (size_t)len);
+    desc->local_addr_len = (uint32_t)len;
+}
+
+int
+platform_path_arm(platform_path_t *s)
+{
+    struct event *ev = event_new(s->p->eb, (evutil_socket_t)s->sock, EV_READ | EV_PERSIST,
+                                 on_socket_read, s);
+    if (!ev) return -1;
+    if (event_add(ev, NULL) < 0) {
+        event_free(ev);
+        return -1;
+    }
+    s->ev = ev;
+    return 0;
+}
+
+void
+platform_path_disarm(platform_path_t *s)
+{
+    if (s->ev) event_del(s->ev);
+}
+
+void
+platform_path_close_socket(platform_path_t *s)
+{
+    if (s->ev) {
+        event_del(s->ev);
+        event_free(s->ev);
+        s->ev = NULL;
+    }
+    if (s->sock != INVALID_SOCKET) {
+        closesocket(s->sock);
+        s->sock = INVALID_SOCKET;
+    }
+}
+
+void
+platform_paths_close_all(platform_win_ctx_t *p)
+{
+    for (int i = 0; i < p->n_paths; i++)
+        platform_path_close_socket(&p->paths[i]);
+}
+
+/* ================================================================
+ *  libmqvpn callbacks
+ * ================================================================ */
+
+static void on_tun_read(evutil_socket_t fd, short what, void *arg);
+
+static void
+cb_tun_output(const uint8_t *pkt, size_t len, void *user_ctx)
+{
+    platform_win_ctx_t *p = (platform_win_ctx_t *)user_ctx;
+    if (p->tun_up && p->tun.session) mqvpn_tun_win_write(&p->tun, pkt, len);
+}
+
+static void
+cb_tunnel_config_ready(const mqvpn_tunnel_info_t *info, void *user_ctx)
+{
+    platform_win_ctx_t *p = (platform_win_ctx_t *)user_ctx;
+
+    /* Clean up stale TUN from previous connection (reconnect case) */
+    if (p->ev_tun) {
+        event_del(p->ev_tun);
+        event_free(p->ev_tun);
+        p->ev_tun = NULL;
+    }
+    if (p->tun.adapter) {
+        mqvpn_tun_win_destroy(&p->tun);
+        p->tun_up = 0;
+    }
+
+    /* Create TUN device */
+    if (mqvpn_tun_win_create(&p->tun, p->tun_name_cfg) < 0) {
+        LOG_ERR("TUN create failed");
+        goto fail;
+    }
+
+    /* Set IPv4 address */
+    char local_ip[INET_ADDRSTRLEN];
+    snprintf(local_ip, sizeof(local_ip), "%d.%d.%d.%d", info->assigned_ip[0],
+             info->assigned_ip[1], info->assigned_ip[2], info->assigned_ip[3]);
+    char peer_ip[INET_ADDRSTRLEN];
+    snprintf(peer_ip, sizeof(peer_ip), "%d.%d.%d.%d", info->server_ip[0],
+             info->server_ip[1], info->server_ip[2], info->server_ip[3]);
+
+    if (mqvpn_tun_win_set_addr(&p->tun, local_ip, peer_ip, 32) < 0) goto fail;
+    if (mqvpn_tun_win_set_mtu(&p->tun, info->mtu) < 0) goto fail;
+
+    /* Set IPv6 address if available */
+    if (info->has_v6) {
+        p->has_v6 = 1;
+        char v6str[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, info->assigned_ip6, v6str, sizeof(v6str));
+        if (mqvpn_tun_win_set_addr6(&p->tun, v6str, info->assigned_prefix6) < 0)
+            LOG_WRN("failed to set IPv6 address on TUN (continuing IPv4-only)");
+    }
+
+    LOG_INF("TUN %s configured: %s -> %s (mtu=%d)", p->tun.name, local_ip, peer_ip,
+            info->mtu);
+
+    /* Set up routes, killswitch, DNS.
+     *
+     * manage_routes=false skips win_setup_routes() entirely. TUN
+     * (Wintun) is still created + addressed + UP and Windows auto-adds
+     * the connected route for the tunnel subnet.
+     *
+     * Skipped: server-pin route via the original adapter + catch-all
+     * 0.0.0.0/1 + 128.0.0.0/1 split-default into the TUN (via
+     * CreateIpForwardEntry2). Without these, traffic outside the
+     * tunnel subnet uses the existing default route — the integrator
+     * must add IP Helper / netsh routes externally (router/embedded
+     * use case). killswitch (WFP) and DNS overrides remain
+     * independently controllable.
+     */
+    if (p->manage_routes) {
+        if (win_setup_routes(p) < 0) {
+            LOG_ERR("route setup failed, aborting tunnel");
+            goto fail;
+        }
+    } else {
+        LOG_INF("manage_routes=off: host routing table left untouched");
+    }
+    if (win_setup_killswitch(p) < 0) {
+        LOG_ERR("killswitch setup failed, aborting tunnel");
+        goto fail;
+    }
+    if (p->n_dns > 0) {
+        p->dns_if_index = p->tun.if_index;
+        if (win_setup_dns(p) < 0)
+            LOG_WRN("DNS override failed (continuing without DNS override)");
+    }
+
+    /* Start reader thread */
+    if (mqvpn_tun_win_start_reader(&p->tun) < 0) {
+        LOG_ERR("TUN reader thread start failed");
+        goto fail;
+    }
+
+    /* Register TUN pipe read event */
+    p->ev_tun = event_new(p->eb, p->tun.pipe_rd, EV_READ | EV_PERSIST, on_tun_read, p);
+    if (!p->ev_tun) {
+        LOG_ERR("failed to create TUN event");
+        goto fail;
+    }
+    event_add(p->ev_tun, NULL);
+    p->tun_up = 1;
+
+    /* Tell library the TUN is active */
+    mqvpn_client_set_tun_active(p->client, 1, -1);
+
+    /* Start periodic dropped-path recovery poll (Linux canon:
+     * platform_linux.c's ev_recover). Create-if-absent because
+     * cb_tunnel_config_ready re-fires on reconnect. */
+    if (!p->ev_recover) p->ev_recover = evtimer_new(p->eb, recover_dropped_paths_cb, p);
+    if (p->ev_recover) {
+        struct timeval tv = {.tv_sec = RECOVER_INTERVAL_SEC};
+        event_add(p->ev_recover, &tv);
+    }
+    return;
+
+fail:
+    win_cleanup_killswitch(p);
+    if (p->manage_routes) win_cleanup_routes(p);
+    win_cleanup_dns(p);
+    if (p->tun.adapter) mqvpn_tun_win_destroy(&p->tun);
+    p->tun_up = 0;
+    /* Tunnel-setup failures here (TUN create, addr/MTU, routes, killswitch,
+     * reader thread, event registration) are local-side problems that
+     * reconnecting won't fix. Mark fatal so the event loop exits non-zero
+     * once the disconnect-induced state change reaches CLOSED. */
+    p->fatal_error = PLATFORM_FATAL_TUNNEL_SETUP;
+    p->shutting_down = 1;
+    mqvpn_client_disconnect(p->client);
+}
+
+static void
+cb_tunnel_closed(mqvpn_error_t reason, void *user_ctx)
+{
+    (void)user_ctx;
+    LOG_INF("tunnel closed: %s", mqvpn_error_string(reason));
+}
+
+static void
+cb_ready_for_tun(void *user_ctx)
+{
+    (void)user_ctx;
+}
+
+static void
+cb_state_changed(mqvpn_client_state_t old_state, mqvpn_client_state_t new_state,
+                 void *user_ctx)
+{
+    platform_win_ctx_t *p = (platform_win_ctx_t *)user_ctx;
+    static const char *names[] = {"IDLE",         "CONNECTING",  "AUTHENTICATING",
+                                  "TUNNEL_READY", "ESTABLISHED", "RECONNECTING",
+                                  "CLOSED"};
+    const char *os = (old_state < 7) ? names[old_state] : "?";
+    const char *ns = (new_state < 7) ? names[new_state] : "?";
+    LOG_INF("state: %s -> %s", os, ns);
+
+    if (new_state == MQVPN_STATE_RECONNECTING || new_state == MQVPN_STATE_CLOSED) {
+        /* Pause the recovery poll and reset its failure budget — reused on
+         * reconnect. route_gate_blocked is intentionally left untouched;
+         * it self-resets in the reconciler (net_mon.c) when a route
+         * reappears, per the field comment in platform_internal_win.h. */
+        if (p->ev_recover) event_del(p->ev_recover);
+        for (int i = 0; i < p->n_paths; i++)
+            p->paths[i].recover_failures = 0;
+        win_cleanup_killswitch(p);
+        if (p->manage_routes) win_cleanup_routes(p);
+        win_cleanup_dns(p);
+        if (p->tun_up) {
+            if (p->ev_tun) {
+                event_del(p->ev_tun);
+                event_free(p->ev_tun);
+                p->ev_tun = NULL;
+            }
+            mqvpn_tun_win_destroy(&p->tun);
+            p->tun_up = 0;
+            mqvpn_client_set_tun_active(p->client, 0, -1);
+        }
+        /* A kill switch we could not tear down keeps blocking everything,
+         * and only process exit clears it (BFE runs down the dynamic session
+         * with its owner). Head for the exit instead of reconnecting into
+         * it — win_setup_killswitch() would refuse the new session anyway. */
+        if (p->wfp_close_failed && !p->shutting_down) {
+            LOG_ERR("kill switch teardown failed, aborting");
+            p->fatal_error = PLATFORM_FATAL_TUNNEL_SETUP;
+            p->shutting_down = 1;
+            if (new_state != MQVPN_STATE_CLOSED) mqvpn_client_disconnect(p->client);
+        }
+
+        if (new_state == MQVPN_STATE_CLOSED && p->shutting_down)
+            event_base_loopbreak(p->eb);
+    }
+}
+
+static void
+cb_path_event(mqvpn_path_handle_t path, mqvpn_path_status_t status, void *user_ctx)
+{
+    (void)user_ctx;
+    static const char *snames[] = {"PENDING", "ACTIVE", "DEGRADED", "STANDBY", "CLOSED"};
+    const char *sn = (status < 5) ? snames[status] : "?";
+    LOG_INF("path %lld -> %s", (long long)path, sn);
+}
+
+static void
+cb_mtu_updated(int mtu, void *user_ctx)
+{
+    platform_win_ctx_t *p = (platform_win_ctx_t *)user_ctx;
+    if (p->tun_up) mqvpn_tun_win_set_mtu(&p->tun, mtu);
+    LOG_INF("TUN MTU updated to %d", mtu);
+}
+
+static void
+cb_log(mqvpn_log_level_t level, const char *msg, void *user_ctx)
+{
+    (void)user_ctx;
+    switch (level) {
+    case MQVPN_LOG_DEBUG: LOG_DBG("[lib] %s", msg); break;
+    case MQVPN_LOG_INFO: LOG_INF("[lib] %s", msg); break;
+    case MQVPN_LOG_WARN: LOG_WRN("[lib] %s", msg); break;
+    case MQVPN_LOG_ERROR: LOG_ERR("[lib] %s", msg); break;
+    }
+}
+
+static void
+cb_reconnect_scheduled(int delay_sec, void *user_ctx)
+{
+    (void)user_ctx;
+    LOG_INF("reconnect scheduled in %d seconds", delay_sec);
+}
+
+/* ================================================================
+ *  Event handlers
+ * ================================================================ */
+
+static void on_tick_timer(evutil_socket_t fd, short what, void *arg);
+
+void
+schedule_next_tick(platform_win_ctx_t *p)
+{
+    mqvpn_interest_t interest;
+    mqvpn_client_get_interest(p->client, &interest);
+
+    int ms = interest.next_timer_ms;
+    struct timeval tv = {
+        .tv_sec = ms / 1000,
+        .tv_usec = (ms % 1000) * 1000,
+    };
+    event_add(p->ev_tick, &tv);
+
+    /* Enable/disable TUN read based on interest */
+    if (p->tun_up && p->ev_tun) {
+        if (interest.tun_readable && !event_pending(p->ev_tun, EV_READ, NULL))
+            event_add(p->ev_tun, NULL);
+        else if (!interest.tun_readable && event_pending(p->ev_tun, EV_READ, NULL))
+            event_del(p->ev_tun);
+    }
+}
+
+static void
+on_tick_timer(evutil_socket_t fd, short what, void *arg)
+{
+    (void)fd;
+    (void)what;
+    platform_win_ctx_t *p = (platform_win_ctx_t *)arg;
+
+    mqvpn_client_tick(p->client);
+    schedule_next_tick(p);
+}
+
+/*
+ * Read framed packets from the TUN reader thread socketpair.
+ * Frame format: [2-byte big-endian length][IP packet payload]
+ */
+static void
+on_tun_read(evutil_socket_t fd, short what, void *arg)
+{
+    (void)fd;
+    (void)what;
+    platform_win_ctx_t *p = (platform_win_ctx_t *)arg;
+    uint8_t frame[2 + 65536];
+
+    for (int i = 0; i < 64; i++) {
+        /* Read length header */
+        int n = recv(p->tun.pipe_rd, (char *)frame, 2, MSG_PEEK);
+        if (n < 2) break;
+
+        uint16_t pkt_len = ((uint16_t)frame[0] << 8) | frame[1];
+        if (pkt_len == 0 || pkt_len > 65535) {
+            /* Drain bad frame header */
+            recv(p->tun.pipe_rd, (char *)frame, 2, 0);
+            continue;
+        }
+
+        int total = 2 + pkt_len;
+        n = recv(p->tun.pipe_rd, (char *)frame, total, 0);
+        if (n < total) break;
+
+        int ret = mqvpn_client_on_tun_packet(p->client, frame + 2, pkt_len);
+        if (ret == MQVPN_ERR_AGAIN) {
+            event_del(p->ev_tun);
+            break;
+        }
+    }
+
+    /* The sends above updated the engine's requested wake (pacing flush,
+     * PTO) — drive the engine and re-arm the tick from it, exactly as
+     * on_socket_read does. Without this, outbound-only traffic leaves the
+     * old timer armed: if the sent packet is lost, no ACK arrives to
+     * re-arm, and the PTO probe waits on the stale (possibly seconds-out)
+     * timer. */
+    mqvpn_client_tick(p->client);
+    schedule_next_tick(p);
+}
+
+void
+on_socket_read(evutil_socket_t fd, short what, void *arg)
+{
+    (void)what;
+    /* The event's arg is its slot (platform_path_arm), so no socket -> slot
+     * scan: nothing on the receive path mutates the table — the net_mon
+     * reconciler runs from its own timer event, never reentrantly here. */
+    platform_path_t *s = (platform_path_t *)arg;
+    platform_win_ctx_t *p = s->p;
+
+    if (!s->bind_ctx) {
+        /* Unreachable by construction: a read event is armed only after
+         * add_path succeeded (startup loop, net_mon re-add), and
+         * platform_path_close_socket frees it before the transport is
+         * released. Kept anyway: were an invariant ever broken, a
+         * level-triggered event on a socket nobody drains would spin —
+         * disarming it turns that into this one WARN. */
+        LOG_WRN("path rx: no transport for fd=%" PRIuPTR ", disarming its event",
+                (uintptr_t)fd);
+        platform_path_disarm(s);
+        return;
+    }
+    /* Budget and delivery live in the bind. A failed receive ends the drain
+     * and is otherwise ignored, as before: net_mon owns drop detection. */
+    (void)mqvpn_bind_winsock_path_drain(s->bind_ctx, p->client, s->handle,
+                                        BULK_READ_COUNT);
+    mqvpn_client_tick(p->client);
+    schedule_next_tick(p);
+}
+
+/* ── Ctrl+C handler ── */
+
+/* Runs on the LOOP thread (ev_wake fired). This is where the shutdown work
+ * actually happens; console_ctrl_handler below must not touch the client. */
+static void
+on_shutdown_wake(evutil_socket_t fd, short what, void *arg)
+{
+    (void)what;
+    platform_win_ctx_t *p = (platform_win_ctx_t *)arg;
+
+    char drain[16];
+    while (recv((SOCKET)fd, drain, sizeof(drain), 0) > 0) {}
+
+    if (p->shutting_down) return; /* repeated Ctrl+C while already closing */
+    p->shutting_down = 1;
+    LOG_INF("received Ctrl+C, shutting down...");
+    mqvpn_client_disconnect(p->client);
+    /* mqvpn_client_disconnect() emits no state transition when the client is
+     * already CLOSED or IDLE, so cb_state_changed cannot be the only loop-exit
+     * path. Mirror the POSIX signal handlers and break directly. */
+    event_base_loopbreak(p->eb);
+}
+
+static BOOL WINAPI
+console_ctrl_handler(DWORD ctrl_type)
+{
+    if (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT) {
+        /* This callback runs on an OS-spawned thread. Calling
+         * mqvpn_client_disconnect() from here (the old code) raced the tick
+         * thread inside xqc_engine_main_logic — every mqvpn_client_* call
+         * must stay on the loop thread (libmqvpn.h single-thread contract).
+         * Only poke the self-pipe: send() on a connected socket is safe
+         * from another thread, and on_shutdown_wake does the real work
+         * in-loop. All mutable shutdown state (shutting_down, the log line)
+         * is written on the loop thread only. */
+        platform_win_ctx_t *p = g_signal_ctx;
+        if (p) (void)send((SOCKET)p->wake_pair[1], "q", 1, 0);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* ================================================================
+ *  DNS helper (from platform/linux/dns.c — portable subset)
+ * ================================================================ */
+
+static int
+win_resolve_host(const char *host, struct sockaddr_storage *out, socklen_t *out_len)
+{
+    struct in_addr a4;
+    struct in6_addr a6;
+
+    if (inet_pton(AF_INET, host, &a4) == 1) {
+        struct sockaddr_in *sin = (struct sockaddr_in *)out;
+        memset(sin, 0, sizeof(*sin));
+        sin->sin_family = AF_INET;
+        sin->sin_addr = a4;
+        *out_len = sizeof(struct sockaddr_in);
+        return 0;
+    }
+    if (inet_pton(AF_INET6, host, &a6) == 1) {
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)out;
+        memset(sin6, 0, sizeof(*sin6));
+        sin6->sin6_family = AF_INET6;
+        sin6->sin6_addr = a6;
+        *out_len = sizeof(struct sockaddr_in6);
+        return 0;
+    }
+
+    struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_DGRAM};
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) return -1;
+
+    memcpy(out, res->ai_addr, res->ai_addrlen);
+    *out_len = (socklen_t)res->ai_addrlen;
+    freeaddrinfo(res);
+    return 0;
+}
+
+static void
+win_sa_set_port(struct sockaddr_storage *ss, uint16_t port)
+{
+    if (ss->ss_family == AF_INET)
+        ((struct sockaddr_in *)ss)->sin_port = htons(port);
+    else if (ss->ss_family == AF_INET6)
+        ((struct sockaddr_in6 *)ss)->sin6_port = htons(port);
+}
+
+/* ================================================================
+ *  Main entry point: win_platform_run_client
+ * ================================================================ */
+
+int
+win_platform_run_client(const mqvpn_client_cfg_t *cfg)
+{
+    int rc = 1;
+    platform_win_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    /* 0 is a plausible SOCKET value on Windows — sentinel the pair
+     * explicitly so the cleanup guards below don't close a stranger. */
+    ctx.wake_pair[0] = ctx.wake_pair[1] = (evutil_socket_t)-1;
+    ctx.server_port = cfg->server_port;
+    ctx.killswitch_enabled = cfg->kill_switch;
+    ctx.manage_routes = cfg->manage_routes;
+
+    if (cfg->n_paths == 0) {
+        LOG_ERR("--path is required on Windows: specify at least one adapter "
+                "FriendlyName (e.g. --path \"Ethernet\"). "
+                "Run 'Get-NetAdapter' in PowerShell to list available adapters.");
+        return 1;
+    }
+
+    /* TUN name */
+    if (cfg->tun_name) {
+        snprintf(ctx.tun_name_cfg, sizeof(ctx.tun_name_cfg), "%s", cfg->tun_name);
+    } else {
+        snprintf(ctx.tun_name_cfg, sizeof(ctx.tun_name_cfg), "mqvpn0");
+    }
+
+    /* DNS setup */
+    for (int i = 0; i < cfg->n_dns && i < 4; i++) {
+        snprintf(ctx.dns_servers[i], sizeof(ctx.dns_servers[i]), "%s",
+                 cfg->dns_servers[i]);
+        ctx.n_dns++;
+    }
+
+    /* Resolve server address */
+    if (win_resolve_host(cfg->server_addr, &ctx.server_addr, &ctx.server_addrlen) < 0) {
+        LOG_ERR("could not resolve server address: %s", cfg->server_addr);
+        return 1;
+    }
+    win_sa_set_port(&ctx.server_addr, (uint16_t)cfg->server_port);
+
+    /* Store server IP string for routing */
+    if (ctx.server_addr.ss_family == AF_INET) {
+        inet_ntop(AF_INET, &((struct sockaddr_in *)&ctx.server_addr)->sin_addr,
+                  ctx.server_ip_str, sizeof(ctx.server_ip_str));
+    } else {
+        inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&ctx.server_addr)->sin6_addr,
+                  ctx.server_ip_str, sizeof(ctx.server_ip_str));
+    }
+
+    /* Create libmqvpn config */
+    mqvpn_config_t *lib_cfg = mqvpn_config_new();
+    if (!lib_cfg) {
+        LOG_ERR("failed to allocate config");
+        return 1;
+    }
+
+    /* Shared CLI→library bridge (vpn_client.h) — the per-platform copy this
+     * replaces once dropped InitMaxPathId on Windows only. */
+    mqvpn_platform_apply_client_config(lib_cfg, cfg);
+
+    /* Create callbacks */
+    mqvpn_client_callbacks_t cbs = MQVPN_CLIENT_CALLBACKS_INIT;
+    cbs.tun_output = cb_tun_output;
+    cbs.tunnel_config_ready = cb_tunnel_config_ready;
+    cbs.tunnel_closed = cb_tunnel_closed;
+    cbs.ready_for_tun = cb_ready_for_tun;
+    cbs.state_changed = cb_state_changed;
+    cbs.path_event = cb_path_event;
+    cbs.mtu_updated = cb_mtu_updated;
+    cbs.log = cb_log;
+    cbs.reconnect_scheduled = cb_reconnect_scheduled;
+
+    /* Platform certificate verifier: the Windows stores decide trust and the
+     * shared rule decides identity. Not installed when the operator supplied
+     * a custom trust path for the library-side verifier (the public header
+     * names SSL_CERT_FILE / SSL_CERT_DIR as overrides of the default paths),
+     * nor with Insecure, where no verifier is ever consulted. */
+    if (!cfg->insecure) {
+        const char *cert_file = getenv("SSL_CERT_FILE");
+        const char *cert_dir = getenv("SSL_CERT_DIR");
+        if (cert_file && cert_file[0]) {
+            LOG_WRN("SSL_CERT_FILE set: verifying against that PEM bundle, not the "
+                    "Windows certificate store");
+        } else if (cert_dir && cert_dir[0]) {
+            LOG_WRN("SSL_CERT_DIR set: verifying against that hashed certificate "
+                    "directory, not the Windows certificate store");
+        } else {
+            int vrc =
+                mqvpn_config_set_cert_verifier(lib_cfg, mqvpn_win_cert_verify, NULL);
+            if (vrc != MQVPN_OK) {
+                LOG_ERR("failed to install the certificate verifier: %d", vrc);
+                mqvpn_config_free(lib_cfg);
+                return 1;
+            }
+        }
+    }
+
+    /* Create client */
+    ctx.client = mqvpn_client_new(lib_cfg, &cbs, &ctx);
+    mqvpn_config_free(lib_cfg);
+    if (!ctx.client) {
+        LOG_ERR("failed to create mqvpn client");
+        return 1;
+    }
+
+    mqvpn_client_set_server_addr(ctx.client, (struct sockaddr *)&ctx.server_addr,
+                                 ctx.server_addrlen);
+
+    /* Create event base */
+    ctx.eb = event_base_new();
+    if (!ctx.eb) {
+        LOG_ERR("event_base_new failed");
+        goto cleanup;
+    }
+
+    /* Create UDP sockets: one slot per configured adapter, or one "any"
+     * slot. The "path_mgr:" lines keep the label of the module these slots
+     * replaced: log wording is a compatibility surface. */
+    {
+        int want = cfg->n_paths > 0 ? cfg->n_paths : 1;
+        for (int i = 0; i < want; i++) {
+            const char *iface = cfg->n_paths > 0 ? cfg->path_ifaces[i] : NULL;
+            platform_path_t *s = platform_path_append(&ctx, iface);
+            if (!s) {
+                LOG_ERR("path_mgr: max paths (%d) reached", MQVPN_MAX_PATHS);
+            } else {
+                int step = 0;
+                s->sock = platform_path_socket_open(ctx.server_addr.ss_family, &step);
+                if (s->sock == INVALID_SOCKET) {
+                    if (step == PLATFORM_PATH_STEP_SOCKET)
+                        LOG_ERR("path_mgr: socket: %s", mqvpn_socket_strerror());
+                    else if (step == PLATFORM_PATH_STEP_NONBLOCK)
+                        LOG_ERR("path_mgr: set_nonblock: %s", mqvpn_socket_strerror());
+                    else
+                        LOG_ERR("path_mgr: bind(%s): %s", iface ? iface : "any",
+                                mqvpn_socket_strerror());
+                } else {
+                    LOG_INF("path_mgr: path[%d] created on %s (fd=%" PRIuPTR ")", i,
+                            iface ? iface : "(any)", (uintptr_t)s->sock);
+                    continue;
+                }
+            }
+            if (cfg->n_paths > 0)
+                LOG_ERR("failed to create UDP socket for path[%d] '%s'", i, iface);
+            else
+                LOG_ERR("failed to create UDP socket");
+            goto cleanup;
+        }
+    }
+
+    /* Register paths with library and create socket events */
+    for (int i = 0; i < ctx.n_paths; i++) {
+        platform_path_t *s = &ctx.paths[i];
+
+        if (s->iface[0]) {
+            if (win_pin_socket_to_iface(s->sock, s->iface, ctx.server_addr.ss_family) <
+                0) {
+                LOG_ERR("path[%d] iface pin failed for '%s'; --path values must be "
+                        "valid adapter FriendlyNames as listed by Get-NetAdapter",
+                        i, s->iface);
+                goto cleanup;
+            }
+        }
+
+        /* The transport ctx borrows the socket (closed at teardown, after the
+         * library is gone) and applies the 7 MiB buffers the library used to
+         * set. */
+        mqvpn_bind_winsock_opts_t bopts = {0};
+        bopts.struct_size = sizeof(bopts);
+        bopts.socket_buf_bytes = 0;
+        snprintf(bopts.tag, sizeof(bopts.tag), "%s", s->iface[0] ? s->iface : "path");
+        void *tctx = NULL;
+        if (mqvpn_bind_winsock_path_new(s->sock, &bopts, &tctx) != MQVPN_OK) {
+            LOG_ERR("path[%d] transport setup failed", i);
+            goto cleanup;
+        }
+
+        mqvpn_path_desc_t desc;
+        platform_path_fill_desc(&ctx, s, &desc);
+        s->handle = mqvpn_client_add_path(ctx.client, &desc,
+                                          mqvpn_bind_winsock_path_ops(), tctx, NULL);
+        if (s->handle < 0) {
+            LOG_ERR("failed to register path %d with library", i);
+            mqvpn_bind_winsock_path_free(tctx); /* add failed: still ours */
+            goto cleanup;
+        }
+        s->bind_ctx = tctx; /* library-owned from here */
+
+        if (platform_path_arm(s) < 0) {
+            LOG_ERR("path[%d] read event setup failed on %s", i,
+                    s->iface[0] ? s->iface : "(any)");
+            goto cleanup;
+        }
+    }
+
+    /* Ctrl+C handler — see console_ctrl_handler: the console-control thread
+     * only pokes this self-pipe, on_shutdown_wake disconnects in-loop. */
+    if (evutil_socketpair(AF_INET, SOCK_STREAM, 0, ctx.wake_pair) < 0) {
+        LOG_ERR("evutil_socketpair for the Ctrl+C bridge failed");
+        goto cleanup;
+    }
+    evutil_make_socket_nonblocking(ctx.wake_pair[0]);
+    evutil_make_socket_nonblocking(ctx.wake_pair[1]);
+    ctx.ev_wake =
+        event_new(ctx.eb, ctx.wake_pair[0], EV_READ | EV_PERSIST, on_shutdown_wake, &ctx);
+    event_add(ctx.ev_wake, NULL);
+    g_signal_ctx = &ctx;
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+
+    /* Tick timer */
+    ctx.ev_tick = event_new(ctx.eb, -1, 0, on_tick_timer, &ctx);
+
+    /* Connect */
+    if (mqvpn_client_connect(ctx.client) != MQVPN_OK) {
+        LOG_ERR("client connect failed");
+        goto cleanup;
+    }
+
+    /* Schedule initial tick */
+    schedule_next_tick(&ctx);
+
+    LOG_INF("entering event loop...");
+    event_base_dispatch(ctx.eb);
+    rc = ctx.fatal_error ? 1 : 0;
+    if (ctx.fatal_error == PLATFORM_FATAL_PATH_RELEASE)
+        LOG_ERR("exiting: path release refused by the library");
+
+cleanup:
+    SetConsoleCtrlHandler(console_ctrl_handler, FALSE);
+    g_signal_ctx = NULL;
+
+    /* Library teardown FIRST, while every callback-owned platform object is
+     * still alive — mirror of the Linux cleanup (platform_linux.c): the
+     * destroy-time deferred flush drives the engine, which can fire the same
+     * callbacks as normal operation — cb_state_changed frees ev_tun and
+     * tears down the TUN, NULLing/clearing ctx fields as it goes, exactly
+     * as for an in-loop close. The old order (TUN + events + path fds freed
+     * BEFORE the destroy) handed those callbacks an already-freed ev_tun and
+     * a dead TUN whenever cleanup was entered with a still-live connection.
+     * After destroy returns no callback can fire, and the NULL/flag guards
+     * below skip whatever the callbacks already released. Path sockets must
+     * also outlive the destroy (the flush sends on them), so
+     * platform_paths_close_all stays below. destroy also finalises every
+     * still-attached transport ctx — never call on_platform_path_released
+     * after it; Windows keeps no receive telemetry, so there is nothing to
+     * harvest from those ctxs first. */
+    mqvpn_client_destroy(ctx.client);
+    ctx.client = NULL;
+    for (int i = 0; i < ctx.n_paths; i++)
+        ctx.paths[i].bind_ctx = NULL; /* finalised by destroy */
+
+    win_cleanup_killswitch(&ctx);
+    if (ctx.manage_routes) win_cleanup_routes(&ctx);
+    win_cleanup_dns(&ctx);
+
+    if (ctx.tun_up) {
+        if (ctx.ev_tun) {
+            event_del(ctx.ev_tun);
+            event_free(ctx.ev_tun);
+        }
+        mqvpn_tun_win_destroy(&ctx.tun);
+    }
+
+    if (ctx.ev_tick) {
+        event_del(ctx.ev_tick);
+        event_free(ctx.ev_tick);
+    }
+
+    if (ctx.ev_recover) {
+        event_del(ctx.ev_recover);
+        event_free(ctx.ev_recover);
+    }
+
+    if (ctx.ev_wake) {
+        event_del(ctx.ev_wake);
+        event_free(ctx.ev_wake);
+    }
+    if (ctx.wake_pair[0] != (evutil_socket_t)-1) evutil_closesocket(ctx.wake_pair[0]);
+    if (ctx.wake_pair[1] != (evutil_socket_t)-1) evutil_closesocket(ctx.wake_pair[1]);
+
+    /* Path sockets (and their read events) close only here, after the
+     * library is gone (see the destroy comment above): the destroy-time
+     * flush sends on them, and the library never closes them itself. */
+    platform_paths_close_all(&ctx);
+
+    if (ctx.eb) event_base_free(ctx.eb);
+
+    return rc;
+}
+
+/* ================================================================
+ *  Server platform layer (placeholder — server typically runs Linux)
+ * ================================================================ */
+
+int
+win_platform_run_server(const mqvpn_server_cfg_t *cfg)
+{
+    (void)cfg;
+    LOG_ERR("Windows server mode is not yet implemented");
+    return 1;
+}
+
+#endif /* _WIN32 */

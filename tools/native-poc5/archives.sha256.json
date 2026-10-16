@@ -1,0 +1,14 @@
+{
+  "lwip-821af1994c4dbaf1e2cba9a7c2207303b3e5327b.tar.gz": {
+    "sha256": "5610359fbaabccf8d37a30ab6fdb0840e890018389e0123e3cd102bd779d03ea",
+    "bytes": 757736
+  },
+  "xquic-5f63f07e31fd3fac027d77713789c068f2e794d5.tar.gz": {
+    "sha256": "45be3867b473f48cfb49c0f3de15b68c3a69bc601e034da1ddd0ad3e5b20be20",
+    "bytes": 1645546
+  },
+  "boringssl-0ce57bbf06a35864fa39e3b9346d41e833683383.tar.gz": {
+    "sha256": "d3599f7beb298e220c3fba884f1cd54f18af1dcc1b9b09ffe6731736746fb952",
+    "bytes": 74584219
+  }
+}

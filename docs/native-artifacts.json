@@ -1,0 +1,14 @@
+{
+  "upstream/android/sdk-native/src/main/jniLibs/arm64-v8a/libmqvpn_cc_jni.so": {
+    "sha256": "78f6b7c1d3ceae8de67eb1b59356d2f71479dbef3001c9ff9406014e954de884",
+    "bytes": 5800
+  },
+  "upstream/android/sdk-native/src/main/jniLibs/arm64-v8a/libmqvpn_jni.so": {
+    "sha256": "7e2372c6e1a4fd1d4b1113fbcd5c37a594de6897e4240a2f3883187747a15c7e",
+    "bytes": 2912464
+  },
+  "upstream/android/app/src/main/jniLibs/arm64-v8a/libiperf_exec.so": {
+    "sha256": "a24945ab36e21e81413fed5096eabc63530b91ce3d108fff7d21f7d4e41e1158",
+    "bytes": 175048
+  }
+}
