@@ -86,7 +86,7 @@ fun RadioScreen(onNavigateUp: () -> Unit, vm: RadioViewModel = hiltViewModel(), 
                     Text("Only SIM switching requires Shizuku. Aggregation and iperf tests work without it.", style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { val intent = context.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api") ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/download/")); context.startActivity(intent) }) { Text(if (shizuku == ShizukuSimState.NotInstalled) "Download Shizuku" else "Open Shizuku") }
-                        Button(onClick = c::requestShizukuPermission, enabled = shizuku == ShizukuSimState.NoPermission) { Text("Authorize MQVPN") }
+                        Button(onClick = c::requestShizukuPermission, enabled = shizuku == ShizukuSimState.NoPermission) { Text("Authorize Smootify") }
                     }
                     TextButton(onClick = c::refresh, enabled = !control.switching) { Text("Refresh radio and Shizuku status") }
                     if (!radio.permissionGranted) Button(onClick = { phonePermission.launch(Manifest.permission.READ_PHONE_STATE) }) { Text("Allow SIM access") }
@@ -102,7 +102,7 @@ fun RadioScreen(onNavigateUp: () -> Unit, vm: RadioViewModel = hiltViewModel(), 
                         "Independent monitor active · persistent notification"
                     options.enabled && options.independent ->
                         "Independent monitor starting or stopped · check notification"
-                    options.enabled && control.vpnSession -> "MQVPN session active · automatic selection active"
+                    options.enabled && control.vpnSession -> "Smootify session active · automatic selection active"
                     options.enabled -> "VPN only · no automatic switching now"
                     else -> "Automatic selection off"
                 },

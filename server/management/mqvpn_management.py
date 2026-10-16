@@ -186,7 +186,7 @@ class Management:
         if self.state.get("status") == "pending":
             try:
                 atomic_write(self.config, self.backup_path.read_bytes())
-                recovered = self.runner("systemctl", "restart", "mqvpn-server.service")
+                recovered = self._restart_server()
                 self.state = {"status": "failed", "applied": None,
                               "error": "interrupted apply rolled back" if recovered
                                        else "interrupted apply; rollback restart failed"}
@@ -242,6 +242,12 @@ class Management:
         result = subprocess.run(command, capture_output=True, timeout=30,
                                 check=False)
         return result.returncode == 0
+
+    def _restart_server(self):
+        # Reset only for an explicit configuration change or its recovery.
+        # The unit's crash-loop protection remains enabled after this start.
+        return self.runner("systemctl", "reset-failed", "mqvpn-server.service") and \
+            self.runner("systemctl", "restart", "mqvpn-server.service")
 
     def snapshot(self):
         _, _, desired = read_config(self.config)
@@ -344,7 +350,7 @@ class Management:
         raw, desired, before = rollback
         time.sleep(self.restart_grace_sec)  # Let the SET reply cross a slow VPN path.
         try:
-            if not self.runner("systemctl", "restart", "mqvpn-server.service"):
+            if not self._restart_server():
                 raise RuntimeError("server restart failed")
             deadline = time.monotonic() + 12
             while time.monotonic() < deadline:
@@ -366,7 +372,7 @@ class Management:
         except (OSError, RuntimeError, subprocess.TimeoutExpired):
             try:
                 atomic_write(self.config, raw)
-                recovered = self.runner("systemctl", "restart", "mqvpn-server.service")
+                recovered = self._restart_server()
                 error = "apply failed; previous configuration restored" if recovered else \
                         "apply failed; rollback restart failed"
                 if recovered:

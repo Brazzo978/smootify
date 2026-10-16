@@ -124,6 +124,36 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual("failed", response["status"])
         self.assertEqual(2, self.restart_count)
 
+    def test_explicit_apply_and_interrupted_recovery_clear_exhausted_start_budget(self):
+        remaining = 0
+
+        def limited_systemd(*parts):
+            nonlocal remaining
+            if parts == ("systemctl", "reset-failed", "mqvpn-server.service"):
+                remaining = 3
+            elif parts == ("systemctl", "restart", "mqvpn-server.service"):
+                if remaining == 0:
+                    return False
+                remaining -= 1
+            return self.run_command(*parts)
+
+        self.manager.runner = limited_systemd
+        for scheduler in ("minrtt", "wlb", "minrtt", "wlb"):
+            desired = {"scheduler": scheduler, "cc": "cubic", "mtu": 1280}
+            _, pending = self.manager.handle(self.signed("set", desired))
+            self.manager.apply(pending)
+            self.assertEqual("applied", self.manager.state["status"])
+        before = self.config.read_bytes()
+        desired = {"scheduler": "minrtt", "cc": "bbr2", "mtu": 1280}
+        self.manager.handle(self.signed("set", desired))
+        self.manager._unlock_provision()
+        remaining = 0
+        recovered = m.Management(self.config, self.state, runner=limited_systemd,
+                                 control=self.control)
+        self.assertEqual(before, self.config.read_bytes())
+        self.assertEqual("interrupted apply rolled back", recovered.state["error"])
+        self.assertFalse(recovered.backup_path.exists())
+
     def test_rejects_unknown_fields_unsupported_values_and_duplicate_json(self):
         desired = {"scheduler": "wlb", "cc": "none", "mtu": 1382}
         with self.assertRaisesRegex(m.RequestError, "unsupported congestion"):

@@ -12,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,6 +38,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -113,15 +115,15 @@ fun DashboardScreen(
         MqvpnState.Disconnected -> "Disconnected"
     }
     val statusDetail = when (val current = state) {
-        is MqvpnState.Connected -> "Traffic is flowing through MQVPN."
+        is MqvpnState.Connected -> "Traffic is flowing through Smootify."
         is MqvpnState.Connecting -> "Waiting for the tunnel to connect."
         is MqvpnState.Reconnecting -> "Retrying in ${current.info.delaySec} s."
         is MqvpnState.Error -> current.error.message ?: "Check the configuration and try again."
         MqvpnState.Disconnected -> "Ready to connect."
     }
 
-    Scaffold(topBar = {
-        if (!embedded) TopAppBar(title = { Text("MQVPN") }, actions = {
+    Scaffold(contentWindowInsets = if (embedded) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets, topBar = {
+        if (!embedded) TopAppBar(title = { Text("Smootify") }, actions = {
             IconButton(onClick = onOpenSettings) {
                 Icon(Icons.Filled.Settings, contentDescription = "Settings")
             }
@@ -131,7 +133,7 @@ fun DashboardScreen(
             Modifier.fillMaxSize().padding(inset).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            if (!embedded) Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("Your connection", style = MaterialTheme.typography.headlineSmall)
                 Text("Tunnel and path status", style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -140,7 +142,7 @@ fun DashboardScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("VPN MQVPN", style = MaterialTheme.typography.labelLarge,
+                        Text("TUNNEL STATUS", style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary)
                         Text(status, style = MaterialTheme.typography.headlineSmall)
                         Text(statusDetail, style = MaterialTheme.typography.bodyMedium,
@@ -201,7 +203,10 @@ fun DashboardScreen(
                 PathsSection(paths, bandwidthHistory)
             }
 
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (embedded) OutlinedButton(onClick = onOpenIperf, modifier = Modifier.fillMaxWidth()) {
+                Text("Run speed test")
+            }
+            if (!embedded) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onOpenConnections, modifier = Modifier.weight(1f)) {
                     Text("Connections")
                 }
@@ -226,8 +231,10 @@ fun DashboardScreen(
                         style = MaterialTheme.typography.bodySmall)
                     if (reorderStats.delivered > 0 || reorderStats.gapCount > 0) ReorderStatsCard(reorderStats)
                 }
-                TextButton(onClick = onOpenServer) { Text("Server and access") }
-                TextButton(onClick = onOpenDiagnostics) { Text("Open diagnostics") }
+                if (!embedded) {
+                    TextButton(onClick = onOpenServer) { Text("Server and access") }
+                    TextButton(onClick = onOpenDiagnostics) { Text("Open diagnostics") }
+                }
                 Text("Recent events", style = MaterialTheme.typography.titleSmall)
                 if (events.isEmpty()) Text("No events", style = MaterialTheme.typography.bodySmall)
                 else {

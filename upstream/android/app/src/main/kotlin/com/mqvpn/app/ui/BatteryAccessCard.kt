@@ -31,7 +31,7 @@ fun BatteryAccessCard() {
     }
     fun open(candidates: List<Intent>) {
         error = if (openFirstBatteryActivity(context, candidates)) null
-            else "Could not open settings. Go to Android Settings > Apps > MQVPN > Battery."
+            else "Could not open settings. Go to Android Settings > Apps > Smootify > Battery."
     }
     val appDetails = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
     Card(Modifier.fillMaxWidth()) {
@@ -40,7 +40,7 @@ fun BatteryAccessCard() {
             Text(if (exempt) "Android battery optimization disabled" else "Battery optimization still active",
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (exempt) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-            Text("Allow MQVPN to keep working with the screen off, for both SIM Switcher and the VPN tunnel.")
+            Text("Allow Smootify to keep working with the screen off, for both SIM Switcher and the VPN tunnel.")
             if (!exempt) Button(onClick = {
                 open(listOf(
                     Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")),
@@ -51,7 +51,7 @@ fun BatteryAccessCard() {
                 open(listOf(appDetails, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)))
             }) { Text("Open app battery settings") }
             if (samsung) {
-                Text("Samsung: also check Battery > Background usage limits > Never sleeping apps. Add MQVPN if available. The app cannot check this Samsung list.",
+                Text("Samsung: also check Battery > Background usage limits > Never sleeping apps. Add Smootify if available. The app cannot check this Samsung list.",
                     style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = {
                     open(listOf(

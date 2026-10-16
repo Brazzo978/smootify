@@ -287,6 +287,7 @@ if [ ! -f /etc/mqvpn/server.conf ]; then
         echo "Subnet = $SUBNET"
         [ -n "$SUBNET6" ] && echo "Subnet6 = $SUBNET6"
         echo "TunName = mqvpn0"
+        echo "MTU = 1280" # Smootify mobile-safe tunnel default
         echo "LogLevel = info"
         echo
         echo "[TLS]"

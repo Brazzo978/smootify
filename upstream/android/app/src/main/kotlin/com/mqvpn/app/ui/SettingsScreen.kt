@@ -41,9 +41,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mqvpn.app.data.DemoSettings
-import com.mqvpn.sdk.core.model.MqvpnConfig
 
-private const val PRIVACY_POLICY_URL = "https://docs.mqvpn.org/privacy"
+private const val PRIVACY_POLICY_URL = "https://github.com/Brazzo978/smootify/blob/main/docs/PRIVACY.md"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,17 +79,6 @@ fun SettingsScreen(
     var authKey by rememberSaveable { mutableStateOf("") }
     var insecure by rememberSaveable { mutableStateOf(false) }
     var killSwitch by rememberSaveable { mutableStateOf(false) }
-    var excludeAndroidAutoFromVpn by rememberSaveable { mutableStateOf(false) }
-    var reorderEnabled by rememberSaveable { mutableStateOf(false) }
-    var reorderProfileName by rememberSaveable {
-        mutableStateOf(MqvpnConfig.ReorderProfile.CELLULAR_BOND.name)
-    }
-    var reorderPorts by rememberSaveable { mutableStateOf("") }
-    var hybridEnabled by rememberSaveable { mutableStateOf(false) }
-    var hybridTcpModeName by rememberSaveable {
-        mutableStateOf(MqvpnConfig.HybridTcpMode.AUTO.name)
-    }
-    var bluetoothPathEnabled by rememberSaveable { mutableStateOf(false) }
 
     // Seed during composition (not LaunchedEffect) to avoid a one-frame flash
     // of empty fields; seeded gate makes it write-once.
@@ -102,13 +90,6 @@ fun SettingsScreen(
         authKey = current.authKey
         insecure = current.insecure
         killSwitch = current.killSwitch
-        excludeAndroidAutoFromVpn = current.excludeAndroidAutoFromVpn
-        reorderEnabled = current.reorderEnabled
-        reorderProfileName = current.reorderProfile
-        reorderPorts = current.reorderPorts
-        hybridEnabled = current.hybridEnabled
-        hybridTcpModeName = current.hybridTcpMode
-        bluetoothPathEnabled = current.bluetoothPathEnabled
         seeded = true
     }
 
@@ -119,13 +100,6 @@ fun SettingsScreen(
         authKey = authKey,
         insecure = insecure,
         killSwitch = killSwitch,
-        excludeAndroidAutoFromVpn = excludeAndroidAutoFromVpn,
-        reorderEnabled = reorderEnabled,
-        reorderProfile = reorderProfileName,
-        reorderPorts = reorderPorts,
-        hybridEnabled = hybridEnabled,
-        hybridTcpMode = hybridTcpModeName,
-        bluetoothPathEnabled = bluetoothPathEnabled,
     )
 
     val fieldsEnabled = isEditable && !isSaving
@@ -133,7 +107,7 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Server and password") },
+                title = { Text("Server and access") },
                 navigationIcon = {
                     IconButton(
                         onClick = { if (!viewModel.isSaving.value) onNavigateUp() },
@@ -198,7 +172,7 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = serverAddress,
                 onValueChange = { serverAddress = it },
-                label = { Text("MQVPN server (IP or name)") },
+                label = { Text("Server address") },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = fieldsEnabled,
                 singleLine = true,
@@ -260,119 +234,9 @@ fun SettingsScreen(
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            Text("Android Auto", style = MaterialTheme.typography.titleSmall)
-            Spacer(modifier = Modifier.height(8.dp))
-            LabeledSwitchRow(
-                label = "Exclude Android Auto from VPN",
-                checked = excludeAndroidAutoFromVpn,
-                onCheckedChange = { excludeAndroidAutoFromVpn = it },
-                enabled = fieldsEnabled,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "Android Auto will use the regular network, outside the VPN. " +
-                    "Save and reconnect MQVPN to apply this change.",
+            Text("Network selection, Android Auto, and tunnel behavior each have their own page in VPN settings.",
                 style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text("Reorder Buffer", style = MaterialTheme.typography.titleSmall)
-            Spacer(modifier = Modifier.height(8.dp))
-            LabeledSwitchRow(
-                label = "Reorder Buffer",
-                checked = reorderEnabled,
-                onCheckedChange = { reorderEnabled = it },
-                enabled = fieldsEnabled,
-            )
-            if (reorderEnabled) {
-                Spacer(modifier = Modifier.height(8.dp))
-                EnumDropdownField(
-                    label = "Reorder Profile",
-                    options = MqvpnConfig.ReorderProfile.entries,
-                    selected = draft.reorderProfileEnum(),
-                    displayName = { it.name.replace("_", " ") },
-                    onSelect = { reorderProfileName = it.name },
-                    enabled = fieldsEnabled,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = reorderPorts,
-                    onValueChange = { reorderPorts = it },
-                    label = { Text("Ports") },
-                    supportingText = { Text("At least one port required") },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = fieldsEnabled,
-                    singleLine = true,
-                )
-                if (!draft.reorderPortsValid()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "At least one port required",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                if (draft.distinctValidPortCount() > DemoSettings.MAX_REORDER_PORTS) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "Only the first ${DemoSettings.MAX_REORDER_PORTS} ports take effect",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = WarningColor,
-                    )
-                }
-                val invalidTokens = draft.invalidPortTokens()
-                if (invalidTokens.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "Invalid ports ignored: " + invalidTokens.joinToString(", "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = WarningColor,
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text("Hybrid Mode", style = MaterialTheme.typography.titleSmall)
-            Spacer(modifier = Modifier.height(8.dp))
-            LabeledSwitchRow(
-                label = "Hybrid Mode",
-                checked = hybridEnabled,
-                onCheckedChange = { hybridEnabled = it },
-                enabled = fieldsEnabled,
-            )
-            if (hybridEnabled) {
-                Spacer(modifier = Modifier.height(8.dp))
-                EnumDropdownField(
-                    label = "TCP Mode",
-                    options = MqvpnConfig.HybridTcpMode.entries,
-                    selected = draft.hybridTcpModeEnum(),
-                    displayName = { it.name },
-                    onSelect = { hybridTcpModeName = it.name },
-                    enabled = fieldsEnabled,
-                )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "Requires hybrid support on the server; TCP connections fail otherwise.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text("Connections", style = MaterialTheme.typography.titleSmall)
-            Spacer(modifier = Modifier.height(8.dp))
-            LabeledSwitchRow(
-                label = "Use Bluetooth tethering",
-                checked = bluetoothPathEnabled,
-                onCheckedChange = { bluetoothPathEnabled = it },
-                enabled = fieldsEnabled,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "Wi-Fi, mobile data and Ethernet are always used together. Turn this on to " +
-                    "also use an internet connection shared over Bluetooth; set it up in the " +
-                    "system Bluetooth settings first.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             if (saveError != null) {
                 Spacer(modifier = Modifier.height(16.dp))

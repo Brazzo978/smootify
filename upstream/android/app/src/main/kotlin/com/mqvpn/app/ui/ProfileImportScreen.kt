@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.mqvpn.app.ui
 
-import android.Manifest
-import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,14 +37,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,24 +53,10 @@ fun ProfileImportScreen(
     onImported: () -> Unit = onNavigateUp,
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     var pasted by remember { mutableStateOf("") }
     var revealInput by remember { mutableStateOf(false) }
 
-    val scan = rememberLauncherForActivityResult(ScanContract()) { result ->
-        result.contents?.let(vm::preview)
-    }
-    fun launchScan() {
-        scan.launch(
-            ScanOptions()
-                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                .setPrompt("Scan an MQVPN VPS profile QR code")
-                .setBeepEnabled(false),
-        )
-    }
-    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        if (it) launchScan() else vm.showError("Camera permission is needed to scan a QR code.")
-    }
+    val scanProfile = rememberProfileQrScanner(vm::preview, vm::showError)
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.previewFile(uri)
     }
@@ -104,11 +85,7 @@ fun ProfileImportScreen(
             Text("Move your VPS connection to this phone", style = MaterialTheme.typography.headlineSmall)
             Text("Scan the QR code from the VPS setup, paste its link, or open a profile file. Review the details before importing. The VPN will not connect automatically.")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                        launchScan()
-                    } else cameraPermission.launch(Manifest.permission.CAMERA)
-                }, enabled = !state.saving) { Text("Scan QR") }
+                Button(onClick = scanProfile, enabled = !state.saving) { Text("Scan QR") }
                 OutlinedButton(onClick = { filePicker.launch(arrayOf("application/json", "text/plain", "*/*")) },
                     enabled = !state.saving) { Text("Open file") }
             }

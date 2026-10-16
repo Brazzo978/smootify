@@ -60,7 +60,7 @@ class MyVpnService : MqvpnVpnService() {
 
     override fun onCreateTun(info: TunnelInfo, config: MqvpnConfig): ParcelFileDescriptor {
         val builder = Builder()
-            .setSession("mqvpn")
+            .setSession("Smootify")
             .addAddress(info.assignedIp, info.prefix)
             .setMtu(info.mtu)
             .setBlocking(true)
