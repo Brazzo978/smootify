@@ -11,11 +11,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,7 +45,7 @@ fun SettingsHubScreen(
 ) {
     Scaffold(topBar = {
         TopAppBar(
-            title = { Text("Settings") },
+            title = { Text("VPN settings") },
             navigationIcon = {
                 IconButton(onClick = onNavigateUp) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -52,36 +54,58 @@ fun SettingsHubScreen(
         )
     }) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Set up MQVPN", style = MaterialTheme.typography.headlineSmall)
-            Text("Choose what to change.", style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            HubItem("Import server profile", "QR code and connection settings", onOpenProfile)
-            HubItem("Server and access", "Address, port, and credentials", onOpenServer)
-            HubItem("Connections", "Choose networks for the tunnel", onOpenConnections)
-            HubItem("Tunnel mode", "Speed, Stability, and advanced settings", onOpenTuning)
-            HubItem("SIM Switcher", "Data SIM switching and independent monitor", onOpenRadio)
-            HubItem("Android Auto", "VPN compatibility", onOpenCompatibility)
-            HubItem("Guided setup", "Review setup step by step", onOpenSetup)
-            HubItem("Diagnostics", "Network details and checks", onOpenDiagnostics)
+            Text(
+                "Connection",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            HubItem("Server and access", "Address, port, and access key", onOpenServer)
+            HubItem("Networks", "Choose which connections the VPN can use", onOpenConnections)
+            HubItem("Tunnel mode", "Speed, stability, and advanced tuning", onOpenTuning)
+
+            Text(
+                "Get started",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            HubItem("Import profile", "Scan a QR code or paste server settings", onOpenProfile)
+            HubItem("Guided setup", "Review the initial setup steps", onOpenSetup)
+
+            Text(
+                "Help and compatibility",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            HubItem("Android Auto", "Control VPN compatibility", onOpenCompatibility)
+            HubItem("Diagnostics", "Inspect networks and connection events", onOpenDiagnostics)
         }
     }
 }
 
 @Composable
 private fun HubItem(title: String, detail: String, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+    Card(
+        Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
         Row(
-            Modifier.fillMaxWidth().padding(16.dp),
+            Modifier.fillMaxWidth().padding(18.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(detail, style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
         }

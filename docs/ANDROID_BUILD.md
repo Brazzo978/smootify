@@ -22,14 +22,18 @@ cd upstream/android
 
 On Windows, use `gradlew.bat :app:assembleDebug` in the same directory.
 Output: `app/build/outputs/apk/debug/app-debug.apk`. Debug builds use your local
-Android debug signing key. Release signing reads the `MQVPN_KEYSTORE_PATH`,
-`MQVPN_KEYSTORE_PASSWORD`, `MQVPN_KEY_ALIAS` and `MQVPN_KEY_PASSWORD` environment
+Android debug signing key. Release signing reads the `SMOOTIFY_KEYSTORE_PATH`,
+`SMOOTIFY_KEYSTORE_PASSWORD`, `SMOOTIFY_KEY_ALIAS` and `SMOOTIFY_KEY_PASSWORD` environment
 variables; without them the release APK remains unsigned. Never commit keys.
 
-The current application ID remains `com.threeklab.mqvpnpoc`, version code 48,
-version `0.17.0-multipath-poc8`. Smootify is the new repository/project name;
-this initial source import preserves the tested app behavior and identity.
-Android tunnel MTU is fixed at **1280**.
+The application ID is **`com.codmanu.smootify`**, version code 49, version
+`0.1.0`. This is a separate installed app from the original MQVPN PoC. Its
+permissions, VPN consent and Shizuku authorization must be granted for the new
+package; Android keeps the old app's private data separate. Android tunnel MTU
+remains fixed at **1280**.
+
+See [Android signing and Google registration](ANDROID_SIGNING.md) for stable
+release APK/AAB builds and certificate verification.
 
 ## Native components
 

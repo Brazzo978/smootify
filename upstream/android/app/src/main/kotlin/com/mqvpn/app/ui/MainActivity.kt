@@ -4,6 +4,7 @@ package com.mqvpn.app.ui
 
 import android.content.Intent
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -40,18 +41,25 @@ class MainActivity : ComponentActivity() {
                 val vm: MqvpnViewModel = hiltViewModel()
                 val iperfVm: IperfViewModel = hiltViewModel()
                 val nav = rememberNavController()
+                fun openScreen(route: String) {
+                    if (nav.currentDestination?.route == route) return
+                    if (!nav.popBackStack(route, inclusive = false)) {
+                        nav.navigate(route) { launchSingleTop = true }
+                    }
+                }
+                var setupDismissed by rememberSaveable { mutableStateOf(false) }
                 var requestedHomeFeature by rememberSaveable { mutableIntStateOf(-1) }
                 val completed by setupPreferences.completed.collectAsStateWithLifecycle()
                 val state by vm.vpnState.collectAsStateWithLifecycle()
                 val entry by nav.currentBackStackEntryAsState()
                 LaunchedEffect(pendingProfilePayload, entry?.destination?.route) {
                     if (pendingProfilePayload != null && entry?.destination?.route != "profile") {
-                        nav.navigate("profile") { launchSingleTop = true }
+                        openScreen("profile")
                     }
                 }
-                LaunchedEffect(completed, state, pendingProfilePayload, entry?.destination?.route) {
-                    if (!completed && pendingProfilePayload == null && state is MqvpnState.Disconnected && entry?.destination?.route == "dashboard") {
-                        nav.navigate("setup") { launchSingleTop = true }
+                LaunchedEffect(completed, setupDismissed, state, pendingProfilePayload, entry?.destination?.route) {
+                    if (!completed && !setupDismissed && pendingProfilePayload == null && state is MqvpnState.Disconnected && entry?.destination?.route == "dashboard") {
+                        openScreen("setup")
                     }
                 }
                 val navigateHome: () -> Unit = {
@@ -62,26 +70,28 @@ class MainActivity : ComponentActivity() {
                 NavHost(nav, startDestination = "dashboard") {
                     composable("dashboard") {
                         FeatureHomeScreen(vm,
-                            onOpenSettings = { nav.navigate("hub") }, onOpenIperf = { nav.navigate("iperf") },
-                            onOpenServer = { nav.navigate("settings") }, onOpenRadio = { nav.navigate("radio") },
-                            onOpenDiagnostics = { nav.navigate("poc") }, onOpenSetup = { nav.navigate("setup") },
-                            onOpenCompatibility = { nav.navigate("compatibility") },
-                            onOpenTuning = { nav.navigate("tuning") },
-                            onOpenConnections = { nav.navigate("connections") },
-                            onOpenProfile = { nav.navigate("profile") },
+                            onOpenSettings = { openScreen("hub") }, onOpenIperf = { openScreen("iperf") },
+                            onOpenServer = { openScreen("settings") }, onOpenRadio = { openScreen("radio") },
+                            onOpenDiagnostics = { openScreen("poc") }, onOpenSetup = { openScreen("setup") },
+                            onOpenCompatibility = { openScreen("compatibility") },
+                            onOpenTuning = { openScreen("tuning") },
+                            onOpenConnections = { openScreen("connections") },
+                            onOpenProfile = { openScreen("profile") },
                             initialFeature = if (requestedHomeFeature >= 0) requestedHomeFeature else if (setupPreferences.lastMode == SetupMode.VPN_ONLY) 1 else 0)
                     }
                     composable("hub") {
                         SettingsHubScreen(onNavigateUp = { nav.navigateUp() },
-                            onOpenServer = { nav.navigate("settings") }, onOpenTuning = { nav.navigate("tuning") },
-                            onOpenRadio = { nav.navigate("radio") }, onOpenCompatibility = { nav.navigate("compatibility") },
-                            onOpenSetup = { nav.navigate("setup") }, onOpenDiagnostics = { nav.navigate("poc") },
-                            onOpenConnections = { nav.navigate("connections") },
-                            onOpenProfile = { nav.navigate("profile") })
+                            onOpenServer = { openScreen("settings") }, onOpenTuning = { openScreen("tuning") },
+                            onOpenRadio = { openScreen("radio") }, onOpenCompatibility = { openScreen("compatibility") },
+                            onOpenSetup = { openScreen("setup") }, onOpenDiagnostics = { openScreen("poc") },
+                            onOpenConnections = { openScreen("connections") },
+                            onOpenProfile = { openScreen("profile") })
                     }
                     composable("setup") {
-                        SetupScreen(onComplete = showSetupHome, onCancel = showSetupHome,
-                            onOpenRadio = { nav.navigate("radio") })
+                        val leaveSetup = { setupDismissed = true; showSetupHome() }
+                        BackHandler(onBack = leaveSetup)
+                        SetupScreen(onComplete = leaveSetup, onCancel = leaveSetup,
+                            onOpenRadio = { openScreen("radio") })
                     }
                     composable("profile") {
                         ProfileImportScreen(onNavigateUp = { nav.navigateUp() }, onImported = showHome,
@@ -94,12 +104,12 @@ class MainActivity : ComponentActivity() {
                     composable("compatibility") { CompatibilityScreen(onNavigateUp = { nav.navigateUp() }) }
                     composable("poc") {
                         DualSimPocScreen(onOpenTunnel = showHome,
-                            onOpenSettings = { nav.navigate("settings") }, onOpenTuning = { nav.navigate("tuning") },
-                            onOpenIperf = { nav.navigate("iperf") })
+                            onOpenSettings = { openScreen("settings") }, onOpenTuning = { openScreen("tuning") },
+                            onOpenIperf = { openScreen("iperf") })
                     }
                     composable("iperf") {
                         IperfScreen(iperfVm, onNavigateUp = { nav.navigateUp() }, onOpenTunnel = showHome,
-                            onOpenTuning = { nav.navigate("connections") })
+                            onOpenTuning = { openScreen("connections") })
                     }
                     composable("connections") { ConnectionsScreen(onNavigateUp = { nav.navigateUp() }) }
                     composable("tuning") { TuningScreen(onNavigateUp = { nav.navigateUp() }) }

@@ -53,11 +53,11 @@ class CompatibilityViewModel @Inject constructor(
                 if (reconnect && (manager.vpnState.value is MqvpnState.Connected || manager.vpnState.value is MqvpnState.Reconnecting)) {
                     manager.disconnectAndAwait()
                     manager.connect(repository.settings.first().toMqvpnConfig(), MyVpnService::class.java)
-                    _message.value = "Setting saved. MQVPN is reconnecting the tunnel with the new configuration."
+                    _message.value = "Setting saved. Smootify is reconnecting the tunnel with the new configuration."
                 } else {
                     _message.value = if (manager.vpnState.value is MqvpnState.Disconnected || manager.vpnState.value is MqvpnState.Error)
                         "Setting saved; it will apply on the next connection."
-                    else "Setting saved. Reconnect MQVPN to apply it to the current tunnel."
+                    else "Setting saved. Reconnect Smootify to apply it to the current tunnel."
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { _message.value = "Impossibile completare l'operazione: ${e.message}" }
@@ -89,7 +89,7 @@ fun CompatibilityScreen(onNavigateUp: () -> Unit, vm: CompatibilityViewModel = h
                     Text(when { settings == null -> "Loading…"; enabled != settings!!.excludeAndroidAutoFromVpn -> "Unsaved change"; enabled == true -> "Compatibility enabled in settings"; else -> "Compatibility not enabled" }, style = MaterialTheme.typography.titleLarge)
                     LabeledSwitchRow("Exclude Android Auto from VPN", enabled == true,
                         { enabled = it }, enabled = !busy && settings != null)
-                    Text("Android Auto traffic will stay outside the tunnel. Other apps will continue using MQVPN.", style = MaterialTheme.typography.bodyMedium)
+                    Text("Android Auto traffic will stay outside the tunnel. Other apps will continue using Smootify.", style = MaterialTheme.typography.bodyMedium)
                 }
             }
             Text(if (vm.installed) "Android Auto detected on this phone" else "Android Auto is not installed or is not visible on this device.", style = MaterialTheme.typography.bodyMedium)
@@ -97,13 +97,13 @@ fun CompatibilityScreen(onNavigateUp: () -> Unit, vm: CompatibilityViewModel = h
             Button(onClick = { vm.save(enabled == true, reconnect = active) },
                 enabled = settings != null && !busy && state !is MqvpnState.Connecting,
                 modifier = Modifier.fillMaxWidth()) {
-                Text(if (busy) "Applying…" else if (active) "Save and reconnect MQVPN" else "Save compatibility setting")
+                Text(if (busy) "Applying…" else if (active) "Save and reconnect Smootify" else "Save compatibility setting")
             }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             message?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
             HorizontalDivider()
             Text("How to test it", style = MaterialTheme.typography.titleMedium)
-            Text("1. Enable the exclusion and save.\n2. Connect MQVPN, or tap Save and reconnect.\n3. Reconnect wireless Android Auto to your car.")
+            Text("1. Enable the exclusion and save.\n2. Connect Smootify, or tap Save and reconnect.\n3. Reconnect wireless Android Auto to your car.")
             Text("If Android blocks all connections outside the VPN in system settings, it may also block the excluded app. This exclusion does not change that Android setting.", style = MaterialTheme.typography.bodySmall)
         }
     }

@@ -1,0 +1,8 @@
+{
+  "appName": "Smootify",
+  "packageName": "com.codmanu.smootify",
+  "signingCertificateSha256": "FA2E0CD52A956EB2366FC7ED7F6CDD7D61B8228BF1197A60674D77621068A722",
+  "certificateFile": "smootify-signing-certificate.pem",
+  "googleRegistrationStatus": "not_confirmed",
+  "playPublicationStatus": "not_published"
+}

@@ -61,11 +61,11 @@ fun IperfScreen(vm: IperfViewModel, onNavigateUp: () -> Unit, onOpenTunnel: () -
     val chartLabels = ui.totals.associate { it.iface to it.label }
     fun share(report: String) {
         context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"; putExtra(Intent.EXTRA_SUBJECT, "MQVPN · iperf test")
+            type = "text/plain"; putExtra(Intent.EXTRA_SUBJECT, "Smootify · iperf test")
             putExtra(Intent.EXTRA_TEXT, report)
         }, "Share result"))
     }
-    Scaffold(topBar = { TopAppBar(title = { Text("Speed test MQVPN") }, navigationIcon = {
+    Scaffold(topBar = { TopAppBar(title = { Text("Speed test Smootify") }, navigationIcon = {
         IconButton(onClick = onNavigateUp) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
     }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
@@ -75,7 +75,7 @@ fun IperfScreen(vm: IperfViewModel, onNavigateUp: () -> Unit, onOpenTunnel: () -
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
                     Text(if (connected) "Tunnel connected · $active active paths" else "Tunnel not connected",
                         style = MaterialTheme.typography.titleSmall)
-                    Text("$simCount SIM · Android MTU 1280 · test over MQVPN tunnel",
+                    Text("$simCount SIM · Android MTU 1280 · test over Smootify tunnel",
                         style = MaterialTheme.typography.bodySmall)
                 }
             }

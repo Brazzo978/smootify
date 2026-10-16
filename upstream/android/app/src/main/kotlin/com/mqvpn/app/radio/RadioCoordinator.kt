@@ -113,7 +113,7 @@ class RadioCoordinator @Inject constructor(@ApplicationContext private val conte
         event(when {
             !value.enabled -> "Automatic selection disabled."
             value.independent -> "Automatic selection enabled even without VPN."
-            else -> "Automatic selection enabled for MQVPN sessions."
+            else -> "Automatic selection enabled for Smootify sessions."
         })
         scope.launch { reconcile() }
     }
@@ -150,7 +150,7 @@ class RadioCoordinator @Inject constructor(@ApplicationContext private val conte
             monitor.stop()
             bridge.stop()
             _state.update { it.copy(idlePaused = false) }
-            message(if (options.value.enabled) "Automatic selection waiting for the independent monitor or an MQVPN session."
+            message(if (options.value.enabled) "Automatic selection waiting for the independent monitor or an Smootify session."
                 else "Automatic selection off.")
         }
     }
@@ -244,7 +244,7 @@ class RadioCoordinator @Inject constructor(@ApplicationContext private val conte
         }
         if (!options.value.enabled) { message("Automatic selection is off. You can inspect radio status or choose a SIM manually."); return }
         if (!session && !(options.value.independent && standaloneRunning)) {
-            message("Automatic selection waiting for the independent monitor or an MQVPN session.")
+            message("Automatic selection waiting for the independent monitor or an Smootify session.")
             return
         }
         if (shizuku.value != ShizukuSimState.Ready) { bridge.start(); message("Automatic selection paused: Shizuku not ready."); return }

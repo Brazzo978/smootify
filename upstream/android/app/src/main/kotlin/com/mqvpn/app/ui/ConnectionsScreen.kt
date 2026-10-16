@@ -168,7 +168,7 @@ fun ConnectionsScreen(onNavigateUp: () -> Unit, viewModel: TuningViewModel = hil
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(Modifier.padding(16.dp)) {
                     LabeledSwitchRow("Use multiple networks together", multipath, { multipath = it }, editable)
-                    Text("When off, MQVPN uses one allowed network at a time.",
+                    Text("When off, Smootify uses one allowed network at a time.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

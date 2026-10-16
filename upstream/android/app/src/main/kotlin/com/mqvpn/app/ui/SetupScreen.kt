@@ -51,7 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mqvpn.app.data.SetupMode
 import com.mqvpn.app.simcontrol.ShizukuSimState
 
-private val setupTitles = listOf("How do you want to use MQVPN?", "VPN server", "Network paths", "Compatibility and permissions", "Summary")
+private val setupTitles = listOf("How do you want to use Smootify?", "VPN server", "Network paths", "Compatibility and permissions", "Summary")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,7 +103,7 @@ fun SetupScreen(
                 when (draft.step) {
                     0 -> "Choose what to set up. You can change these options later."
                     1 -> "Enter your server details. The key stays hidden on screen."
-                    2 -> "Choose which networks MQVPN can use together when available."
+                    2 -> "Choose which networks Smootify can use together when available."
                     3 -> if (draft.mode == SetupMode.SIM_ONLY) "Check SIM Switcher requirements." else "Check Android Auto and requirements for optional SIM switching."
                     else -> "Save the configuration. No connection or SIM change will start automatically."
                 },

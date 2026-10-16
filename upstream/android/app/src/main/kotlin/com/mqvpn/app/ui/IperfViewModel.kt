@@ -87,7 +87,7 @@ class IperfViewModel @Inject constructor(@ApplicationContext private val context
     fun start(options: IperfOptions, bothProtocols: Boolean, requireTwoPaths: Boolean) {
         if (_ui.value.running) return
         if (manager.vpnState.value !is MqvpnState.Connected) {
-            _ui.update { it.copy(message = "Connect MQVPN first.") }; return
+            _ui.update { it.copy(message = "Connect Smootify first.") }; return
         }
         if (requireTwoPaths) dualSimTestError(manager.paths.value)?.let { error ->
             _ui.update { it.copy(message = error) }; return
@@ -178,7 +178,7 @@ class IperfViewModel @Inject constructor(@ApplicationContext private val context
                 val date = SimpleDateFormat("dd/MM HH:mm:ss", Locale.ITALY).format(Date())
                 val title = "$date · ${options.protocol} ${if (options.direction == IperfDirection.DOWN) "download" else "upload"}"
                 val report = buildString {
-                    appendLine("MQVPN iperf3 · $title")
+                    appendLine("Smootify iperf3 · $title")
                     appendLine("${options.host}:${options.port} · ${options.durationSeconds} s · ${options.streams} streams · Android MTU 1280")
                     appendLine("Scheduler ${settings.scheduler} · CC ${settings.congestionControl} · Hybrid ${settings.hybridEnabled}")
                     if (options.protocol == IperfProtocol.UDP) appendLine("UDP offered: ${options.udpTargetMbps} Mbit/s total")

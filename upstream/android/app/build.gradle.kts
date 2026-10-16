@@ -18,11 +18,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.threeklab.mqvpnpoc"
+        applicationId = "com.codmanu.smootify"
         minSdk = 26
         targetSdk = 36
-        versionCode = 48
-        versionName = "0.17.0-multipath-poc8"
+        versionCode = 49
+        versionName = "0.1.0"
         // arm64-v8a only: must match sdk-native's abiFilters. Adding ABIs here
         // without updating sdk-native produces APKs that crash with
         // UnsatisfiedLinkError on those ABIs (no .so packaged).
@@ -35,10 +35,10 @@ android {
     // (local `assembleRelease` without env), Gradle leaves the variant
     // unsigned and the build produces an unsigned APK that zipalign can
     // sign later — fine for local inspection.
-    val ksPath = System.getenv("MQVPN_KEYSTORE_PATH")
-    val ksPass = System.getenv("MQVPN_KEYSTORE_PASSWORD")
-    val keyAlias = System.getenv("MQVPN_KEY_ALIAS")
-    val keyPass = System.getenv("MQVPN_KEY_PASSWORD")
+    val ksPath = (System.getenv("SMOOTIFY_KEYSTORE_PATH") ?: System.getenv("MQVPN_KEYSTORE_PATH"))
+    val ksPass = (System.getenv("SMOOTIFY_KEYSTORE_PASSWORD") ?: System.getenv("MQVPN_KEYSTORE_PASSWORD"))
+    val keyAlias = (System.getenv("SMOOTIFY_KEY_ALIAS") ?: System.getenv("MQVPN_KEY_ALIAS"))
+    val keyPass = (System.getenv("SMOOTIFY_KEY_PASSWORD") ?: System.getenv("MQVPN_KEY_PASSWORD"))
     val haveSigning = !ksPath.isNullOrBlank() && !ksPass.isNullOrBlank() &&
         !keyAlias.isNullOrBlank() && !keyPass.isNullOrBlank()
     if (haveSigning) {

@@ -56,8 +56,8 @@ firewall details, recovery and troubleshooting.
 
 ## Android source and build
 
-The current Android app is the working PoC8 baseline, with its tested application
-ID and interface identity preserved. Smootify is the new project/repository name.
+The Android app is **Smootify**, package **`com.codmanu.smootify`**. It builds on
+the PoC8 tunnel/radio baseline with a simpler two-feature interface.
 The app and SDK sources live under [`upstream/android`](upstream/android).
 
 Follow the **[Android build guide](docs/ANDROID_BUILD.md)**. The repository includes

@@ -69,7 +69,7 @@ fun ProfileImportScreen(
         scan.launch(
             ScanOptions()
                 .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                .setPrompt("Scan an MQVPN VPS profile QR code")
+                .setPrompt("Scan an Smootify VPS profile QR code")
                 .setBeepEnabled(false),
         )
     }
