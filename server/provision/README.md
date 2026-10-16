@@ -20,7 +20,7 @@ The install wizard asks for a public IP or DNS name, the first client name and T
 mode. Missing distro packages can be installed after confirmation. Setup downloads
 the pinned upstream MQVPN **v0.17.0** release and verifies its SHA-256 manifest,
 configures forwarding/NAT, installs management and iperf, and creates a separate
-client key. Its QR imports into the Smootify Android app, with **MTU 1280**.
+client key. Its QR imports into the Smootify Android app, with **MTU 1280**. Fresh server configurations also use MTU 1280.
 
 ## The menu
 
@@ -43,7 +43,9 @@ The command works outside the checkout: installer assets are retained in
   separate confirmation. The menu itself remains available to reinstall.
 
 Adding or revoking users currently restarts the shared server and briefly
-interrupts all clients. Native MQVPN supports up to 64 configured users. Existing
+interrupts all clients. Explicit configuration changes reset the previous systemd
+start counter so repeated client edits do not exhaust its budget; automatic
+crash-loop protection remains enabled. Native MQVPN supports up to 64 configured users. Existing
 externally managed users can be listed; this manager does not revoke them.
 
 QRs contain personal credentials: scan privately and close the terminal when

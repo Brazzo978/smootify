@@ -209,6 +209,10 @@ class Provisioner:
         return raw
 
     def _runtime(self, expected):
+        # Explicit client edits may legitimately restart several times in a minute.
+        # Clear the prior start budget; systemd still limits subsequent crash loops.
+        if not self.runner("reset-failed", SERVICE):
+            return False
         if not self.runner("restart", SERVICE) or not self.runner("is-active", "--quiet", SERVICE):
             return False
         deadline = time.monotonic() + 6

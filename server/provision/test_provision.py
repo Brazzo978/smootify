@@ -86,6 +86,27 @@ class ProvisionTests(unittest.TestCase):
         self.assertFalse((self.profiles / "alice.json").exists())
         self.assertFalse(self.provision.backup.exists())
 
+    def test_client_changes_work_after_systemd_start_budget_is_exhausted(self):
+        remaining = 0
+
+        def limited_systemd(*args):
+            nonlocal remaining
+            if args == ("reset-failed", module.SERVICE):
+                remaining = 3
+            elif args == ("restart", module.SERVICE):
+                if remaining == 0:
+                    return False
+                remaining -= 1
+            return True
+
+        self.provision.runner = limited_systemd
+        for name in ("alice", "bob", "carol", "dave"):
+            self.provision.add(name)
+        self.provision.revoke("bob")
+        self.assertEqual([("alice", True), ("carol", True), ("dave", True)],
+                         self.provision.list_users())
+        self.assertFalse(self.provision.backup.exists())
+
     def test_wrong_subnet_rejected_before_profiles_or_services_change(self):
         wrong = CONFIG.replace("10.88.0.0/24", "10.0.0.0/24")
         self.config.write_text(wrong, encoding="utf-8")
